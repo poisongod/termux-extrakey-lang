@@ -1,0 +1,19 @@
+{
+  "name": "termux-extrakey-tui",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpenTUI app for Termux (Node 26.3+, --experimental-ffi)",
+  "main": "src/app.mjs",
+  "scripts": {
+    "start": "node --experimental-ffi src/app.mjs"
+  },
+  "dependencies": {
+    "@xincli/opentui-core": "^0.4.7",
+    "@xincli/opentui-core-android-arm64": "^0.4.7",
+    "@xincli/opentui-react": "^0.4.7",
+    "react": "^19.2.0",
+    "react-devtools-core": "^7.0.1",
+    "react-reconciler": "^0.33.0",
+    "ws": "^8.18.0"
+  }
+}
