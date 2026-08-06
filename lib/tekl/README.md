@@ -1,27 +1,26 @@
 # tekl — Termux Extra Key Language
 
-tekl 是描述 Termux 扩展键盘(`extra-keys`)的领域语言及其工具链:解析器、编译器、验证器与 CLI。
+tekl 是描述 Termux 扩展键盘(`extra-keys`)的领域语言及其工具链:解析器、编译器与 CLI。
 
 - **tekl DSL** → 编译为 Termux 使用的 JSON(`extra-keys = [...]`,写入 `~/.termux/termux.properties`)
-- **JSON DSL 解析器** 复刻 Android `org.json.JSONTokener` 语义(宽松语法),用于直接解析/校验 termux.properties 中的手写 JSON
-- **四字段结构验证** 对照 Termux 源码 `ExtraKeyButton` 的约束(key/macro 互斥、单层 popup、display 字符串)
+- **四字段结构验证** 编译期对照 Termux 源码 `ExtraKeyButton` 的约束(key/macro 互斥、单层 popup、display 字符串)
+- 配套 **tjek**(JSON DSL 解析/校验工具链)见 `lib/tjek/README.md`
 
 ## 安装
 
 ```bash
 # Node.js 26.3+ (Termux: pkg install nodejs-lts)
 npm install
-npm link   # 提供 tekl 与 tekl-validate 命令
+npm link   # 提供 termux-extrakey-tekl 与 termux-extrakey-tjek 命令
 ```
 
 ## 快速开始
 
 ```bash
-tekl keys.tekl                    # 编译并写入 ~/.termux/termux.properties
-tekl keys.tekl --output my.props # 写入自定义文件
-tekl keys.tekl --reload          # 写入后调用 termux-reload-settings
-tekl keys.tekl --watch           # 监听文件, 改动自动重编译写入
-tekl-validate keys.json          # 解析+验证(宽松 JSON DSL)
+termux-extrakey-tekl keys.tekl                     # 编译并写入 ~/.termux/termux.properties
+termux-extrakey-tekl keys.tekl --output my.props   # 写入自定义文件
+termux-extrakey-tekl keys.tekl --reload            # 写入后调用 termux-reload-settings
+termux-extrakey-tekl keys.tekl --watch             # 监听文件, 改动自动重编译写入
 ```
 
 ## 语法 (tekl.ebnf)
@@ -59,31 +58,6 @@ CTRL(C) ALT(A) HOME:Start ESC.F1;
 [["ESC","TAB","CTRL","ALT"],[{"macro":"CTRL C","display":"CTRL C"},{"macro":"ALT A","display":"ALT A"},{"key":"HOME","display":"Start"},{"key":"ESC","popup":"F1"}]]
 ```
 
-## JSON DSL (宽松语法)
-
-`tekl-validate` 可解析 Termux 官方 JSON 写法,key/值可省略引号、支持单双引号、
-数字、布尔、`\u` 转义、尾逗号(与 Android `JSONTokener` 一致):
-
-```bash
-tekl-validate - <<'EOF'
-[
-  [{key: ESC, popup: {macro: "CTRL f d", display: "tmux exit"}},
-   {key: TAB, popup: {macro: "ALT a", display: A-a}}]
-]
-EOF
-# OK: valid termux extra-keys DSL
-```
-
-错误报告带源码片段、行列定位与修复提示:
-
-```
-SyntaxError: json-dsl: expected ',' or '}', got ']' (line 3, column 1)
-  location: line 3, column 1 (char 43)
-    3 | ]
-      | ^
-  hint: fix the JSON structure
-```
-
 ## 架构
 
 ```
@@ -93,17 +67,13 @@ lib/tekl/
 ├── compiler.mjs       # AST -> ExtraKeyButton JSON, CompileError
 ├── compiler-io.mjs    # compileSource / updateProperties (原子写+验证) / reload
 ├── jit.mjs            # --watch 热重载
-├── json-dsl.mjs       # Android JSONTokener 兼容的宽松 JSON 解析器
-├── validate-json.mjs  # 四字段结构验证 (ExtraKeyButton 约束)
-├── error-report.mjs   # 完整错误报告 (源码片段+行列+hint)
-├── cli.mjs            # tekl 命令
-└── tekl-validate.mjs  # tekl-validate 命令
+└── cli.mjs            # termux-extrakey-tekl 命令
 ```
 
 ## 测试
 
 ```bash
-npm test   # 53 用例: tekl EBNF 逐产生式 / JSON DSL / 结构验证
+npm test   # 53 用例: tekl EBNF 逐产生式 / tjek JSON DSL / 结构验证
 ```
 
 ## 约束 (与 Termux 一致)

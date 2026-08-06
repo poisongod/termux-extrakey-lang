@@ -5,8 +5,8 @@
   "description": "Termux extra-keys: tekl DSL toolchain + TUI editor (Node 26.3+)",
   "main": "src/app.mjs",
   "bin": {
-    "tekl": "lib/tekl/cli.mjs",
-    "tekl-validate": "lib/tekl/tekl-validate.mjs"
+    "termux-extrakey-tekl": "lib/tekl/cli.mjs",
+    "termux-extrakey-tjek": "lib/tjek/cli.mjs"
   },
   "scripts": {
     "start": "node --experimental-ffi src/app.mjs",
