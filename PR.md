@@ -6,8 +6,8 @@
 
 ## 0 TL;DR
 
-This is a proposal, not a replacement plan. It adds an **optional** way to author
-`extra-keys`:
+This is a proposal with a **working reference implementation**. It adds an
+**optional** way to author `extra-keys`:
 
 - A new `extra-keys-tekl` property holds tekl source.
 - A ~300-line pure-Kotlin compiler turns it straight into Termux's internal
@@ -16,6 +16,50 @@ This is a proposal, not a replacement plan. It adds an **optional** way to autho
   working; nothing is migrated or removed.
 - tekl errors are caught at compile time with line + column.
 - Zero new dependencies; GPLv3.
+
+## 0.5 It already runs today (MVP)
+
+The language and toolchain are **already built and exercised** — not a sketch. See
+the public repo:
+
+> **https://github.com/poisongod/termux-extrakey-lang** (GPLv3)
+
+It ships a Node.js implementation of the full pipeline used in this PR's design:
+
+```
+tokenizer → parser → compiler → (validation) → CLI
+```
+
+Try it now inside a fresh Termux:
+
+```bash
+git clone https://github.com/poisongod/termux-extrakey-lang
+cd termux-extrakey-lang
+npm install && npm test        # 59 tests: grammar, mapping, errors, warnings
+npm link
+
+termux-extrakey-tekl keys.tekl --reload    # compile+write+reload termux.properties
+termux-extrakey-tekl keys.tekl --watch     # recompile on every save
+termux-extrakey-tjek <file|->              # validate existing JSON configs
+```
+
+`keys.tekl` example (the repo's own sample; see `README.md` for the full mapping):
+
+```
+ESC TAB CTRL ALT HOME UP END PGUP
+PGDN DOWN LEFT RIGHT DEL BKSP INS;
+CTRL(C) ALT(A) FN(F) SHIFT(S)
+CTRL(A):toggle HOME:Start ESC.F1;
+DRAWER KEYBOARD SCROLL SPACE ENTER
+BACKSLASH QUOTE APOSTROPHE
+F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12;
+```
+
+While editing `keys.tekl`, the `--watch` mode recompiles and refreshes the keyboard
+immediately — the same UX this PR would enable natively in the app.
+
+The PR would port this tested compiler into `termux-shared`/Kotlin and connect it to the
+property loader; the grammar, tests and docs all already exist.
 
 ---
 
@@ -118,10 +162,9 @@ app/src/test/...                                        tekl test suite
 
 ### 3.3 Maturity
 
-The language and compiler already exist and are exercised: the JS reference in
-`poisongod/termux-extrakey-lang` (GPLv3) has 59 passing tests covering grammar, model
-mapping, errors and warnings. This PR would be a port of that tested behavior, plus
-integration tests — not a greenfield design.
+Covered in §0.5: the compiler, CLI and 59 tests already exist and are publicly
+reviewable; the integration part of this PR is a port plus property wiring, not a
+greenfield design.
 
 ---
 
