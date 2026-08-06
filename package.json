@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Termux extra-keys: tekl DSL toolchain + TUI editor (Node 26.3+)",
+  "license": "GPL-3.0-or-later",
   "main": "src/app.mjs",
   "bin": {
     "termux-extrakey-tekl": "lib/tekl/cli.mjs",

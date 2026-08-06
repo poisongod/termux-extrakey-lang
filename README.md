@@ -1,9 +1,11 @@
-# termux-extrakey
+# termux-extrakey-lang
 
 Extra keys for Termux, powered by two languages:
 
 - **tekl** — Termux Extra Key Language: 描述扩展键盘的 DSL,编译器生成 `extra-keys` JSON 写入 `~/.termux/termux.properties`
 - **tjek** — Termux Json Extended key language: Android `JSONTokener` 兼容的宽松 JSON DSL 解析/校验工具链
+
+许可:[GPL-3.0](LICENSE)(与 Termux 相同)。
 
 ## 命令
 
