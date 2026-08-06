@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { parse, ParseError } from "../lib/tekl/parser.mjs"
-import { compile, CompileError } from "../lib/tekl/compiler.mjs"
+import { compile, CompileError, collectWarnings } from "../lib/tekl/compiler.mjs"
 
 // EBNF (tekl.ebnf)
 // N ::= 命名键 (ESC, TAB, ..., 或 [A-Za-z0-9_-]*)
@@ -99,4 +99,35 @@ test("重复特殊键在同一行被拒绝", () => {
 
 test("组合键只含重命名外层不可编译", () => {
   assert.throws(() => comp("CTRL:C(A);"), CompileError)
+})
+
+test("警告: 空 label 产生空 display 值", () => {
+  assert.deepEqual(comp("ESC:;"), [[{ key: "ESC", display: "" }]])
+  const warnings = collectWarnings(comp("ESC:;"))
+  assert.ok(warnings.some((w) => /display.*值为空/.test(w)))
+})
+
+test("警告: 空 popup 值", () => {
+  const ws = collectWarnings(comp("ESC.A:;"))
+  assert.ok(ws.some((w) => /popup.*display.*值为空/.test(w)))
+})
+
+test("警告: 键盘行键位数不一致", () => {
+  const warnings = collectWarnings(comp("ESC TAB;\nCTRL ALT FN;"))
+  assert.ok(warnings.some((w) => /键位数不同/.test(w)))
+})
+
+test("警告: 缺少应用抽屉键 (DRAWER)", () => {
+  const warnings = collectWarnings(comp("ESC TAB;"))
+  assert.ok(warnings.some((w) => /DRAWER/.test(w)))
+})
+
+test("警告: 缺少键盘切换键 (KEYBOARD)", () => {
+  const warnings = collectWarnings(comp("DRAWER ESC;"))
+  assert.ok(warnings.some((w) => /KEYBOARD/.test(w)))
+})
+
+test("无警告: 含 DRAWER/KEYBOARD 且行长一致且非空", () => {
+  const warnings = collectWarnings(comp("DRAWER KEYBOARD ESC;\nTAB CTRL ALT;"))
+  assert.deepEqual(warnings.filter((w) => !/DRAWER|KEYBOARD/.test(w)), [])
 })
