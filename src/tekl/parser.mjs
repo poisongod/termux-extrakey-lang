@@ -26,6 +26,8 @@ function isSpecial(id) {
   return SPECIAL_KEYS.has(id)
 }
 
+// A ::= N | S | A(A) | A:N
+// 尾随后缀可叠加: A(B):C  => 组合键(重命名外显 C)
 export function parse(src) {
   const tokens = tokenize(src)
   const rows = []
@@ -48,88 +50,59 @@ export function parse(src) {
     return tok
   }
 
-  function isMacroAhead() {
-    let j = i
-    let sawIdent = false
-    while (tokens[j].type === "IDENT") {
-      sawIdent = true
-      j++
-    }
-    return sawIdent && tokens[j].type === "COLON"
-  }
-
-  function parseKey() {
+  // N/S 基座:
+  //   ESC, TAB, ..., CTRL, ALT, 任意 [A-Za-z0-9_-]*
+  function parseBaseKey() {
     const tok = next()
     if (tok.type !== "IDENT") {
       throw new ParseError(`expected key, got ${tok.type}`, tok.line, tok.column)
     }
-
-
-    const key = tok.value
-    const kind = isSpecial(key) ? "special" : "named"
-
-    const nextTok = peek()
-
-    if (nextTok.type === "DOT") {
-      next()
-      const popupTok = next()
-      if (popupTok.type !== "IDENT") {
-        throw new ParseError(`expected key after '.', got ${popupTok.type}`, popupTok.line, popupTok.column)
-      }
-
-      return { type: "popup", key, popup: popupTok.value }
-    }
-
-    if (nextTok.type === "LPAREN") {
-      next()
-      const innerTok = next()
-      if (innerTok.type !== "IDENT") {
-        throw new ParseError(`expected key inside '()', got ${innerTok.type}`, innerTok.line, innerTok.column)
-      }
-
-      expect("RPAREN")
-      return { type: "combo", modifier: key, target: innerTok.value }
-    }
-
-    if (nextTok.type === "COLON") {
-      next()
-      const labelTok = next()
-      if (labelTok.type !== "IDENT") {
-        throw new ParseError(`expected label after ':', got ${labelTok.type}`, labelTok.line, labelTok.column)
-      }
-      return { type: "label", key, label: labelTok.value }
-    }
-
-    return { type: "key", key, kind }
+    return { type: "key", key: tok.value, kind: isSpecial(tok.value) ? "special" : "named" }
   }
 
-  function parseMacro() {
-    const keys = []
-    while (peek().type === "IDENT") {
-      keys.push(next().value)
-    }
+  function parseAtom() {
+    let node = parseBaseKey()
 
-    expect("COLON")
+    while (true) {
+      const t = peek()
 
-    if (keys.length === 1) {
-      const labelTok = next()
-      if (labelTok.type !== "IDENT") {
-        throw new ParseError(`expected label after ':', got ${labelTok.type}`, labelTok.line, labelTok.column)
+      if (t.type === "LPAREN") {
+        next()
+        const inner = parseAtom()
+        expect("RPAREN")
+        node = { type: "combo", node, inner }
+        continue
       }
-      return { type: "label", key: keys[0], label: labelTok.value }
+
+      if (t.type === "COLON") {
+        next()
+        const labelTok = peek()
+        if (labelTok.type !== "IDENT") {
+          throw new ParseError(`expected label after ':', got ${labelTok.type}`, labelTok.line, labelTok.column)
+        }
+        next()
+        node = { type: "label", node, label: labelTok.value }
+        continue
+      }
+
+      break
     }
 
-    const labels = []
-    while (peek().type === "IDENT") {
-      labels.push(next().value)
-    }
+    return node
+  }
 
-    if (labels.length === 0) {
-      const tok = peek()
-      throw new ParseError(`expected label after ':' in macro, got ${tok.type}`, tok.line, tok.column)
+  // M ::= A | A.A | M M | M'\n' | M';\n'
+  function parseEntry() {
+    const main = parseAtom()
+    if (peek().type === "DOT") {
+      next()
+      const popupNode = parseAtom()
+      if (popupNode.type === "popup") {
+        throw new ParseError("nested popup is not supported", popupNode.line, popupNode.column)
+      }
+      return { type: "popup", main, popupNode }
     }
-
-    return { type: "macro", keys, label: labels.join(" ") }
+    return main
   }
 
   while (true) {
@@ -152,11 +125,7 @@ export function parse(src) {
     }
 
     if (tok.type === "IDENT") {
-      if (isMacroAhead()) {
-        row.push(parseMacro())
-      } else {
-        row.push(parseKey())
-      }
+      row.push(parseEntry())
       continue
     }
 
@@ -172,13 +141,35 @@ export function parse(src) {
 function validateRows(rows) {
   for (let r = 0; r < rows.length; r++) {
     const specials = new Map()
-    for (const key of rows[r]) {
-      if (key.kind === "special" && key.type === "key") {
-        if (specials.has(key.key)) {
-          throw new ParseError(`special key '${key.key}' appears more than once in row ${r + 1}`, 0, 0)
+    for (const entry of rows[r]) {
+      // 只统计"根按键"是特殊键的条目(组合/弹出里的内部键不算)
+      const isKey = entry.type === "key" && entry.kind === "special"
+      const isLabeledSpecial =
+        entry.type === "label" && entry.node?.type === "key" && entry.node.kind === "special"
+      const t = isKey ? entry : isLabeledSpecial ? entry.node : null
+      if (t) {
+        if (specials.has(t.key)) {
+          throw new ParseError(`special key '${t.key}' appears more than once in row ${r + 1}`, 0, 0)
         }
-        specials.set(key.key, true)
+        specials.set(t.key, true)
       }
     }
   }
+}
+
+// visit every leaf key in the parse tree (used for duplicate checks)
+function visitEntries(entries, cb) {
+  const walk = (n) => {
+    if (n === undefined || n === null) return
+    if (n.type === "key") cb(n)
+    else if (n.type === "combo") {
+      walk(n.node)
+      walk(n.inner)
+    } else if (n.type === "label") {
+      walk(n.node)
+    } else if (n.type === "popup") {
+      walk(n.main)
+    }
+  }
+  for (const e of entries) walk(e)
 }

@@ -6,49 +6,76 @@ export class CompileError extends Error {
   }
 }
 
-const MODIFIER_KEYS = ["CTRL", "ALT", "SHIFT", "FN"]
-
-export function compile(rows) {
-  return rows.map((row) => row.map(compileKey))
+// A(A) 组合键:递归收集叶子键 -> "CTRL ALT X"
+function collectComboKeys(node, out = []) {
+  if (node.type === "combo") {
+    collectComboKeys(node.node, out)
+    collectComboKeys(node.inner, out)
+    return out
+  }
+  if (node.type === "key") {
+    out.push(node.key)
+    return out
+  }
+  throw new CompileError(`combo contains '${node.type}' (only keys allowed inside '()')`)
 }
 
-function compileKey(node) {
+// 单个 A 的编译结果:
+//   N                    -> "ESC"         (字符串键)
+//   N:Label              -> {key, popup}?  -> {key, display}
+//   A(B)                 -> {macro, display}
+//   A(B):Label           -> {macro, display: Label}
+function compileAtom(node) {
   switch (node.type) {
     case "key":
       return node.key
 
-    case "popup":
-      return { key: node.key, popup: node.popup }
-
-    case "combo":
-      return compileCombo(node)
-
-    case "label":
-      return { key: node.key, display: node.label }
-
-    case "macro":
-      for (const key of node.keys) {
-        if (!MODIFIER_KEYS.includes(key) && !/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) {
-          throw new CompileError(`invalid key '${key}' in macro`)
+    case "label": {
+      const base = compileAtom(node.node)
+      if (typeof base === "string") return { key: base, display: node.label }
+      if (base && typeof base === "object") {
+        const keys = Object.keys(base)
+        if (keys.includes("key") || keys.includes("macro")) {
+          return { ...base, display: node.label }
         }
       }
-      return { macro: node.keys.join(" "), display: node.label }
+      throw new CompileError(`cannot label '${JSON.stringify(base)}'`)
+    }
+
+    case "combo": {
+      const keys = collectComboKeys(node)
+      if (keys.length < 2) {
+        throw new CompileError(`combo '${keys.join(" ")}' must contain the modifier and at least one key`)
+      }
+      const macro = keys.join(" ")
+      return { macro, display: macro }
+    }
+
+    case "popup":
+      throw new CompileError(`'${node.popup}': popup is not valid inside '()'`)
 
     default:
       throw new CompileError(`unknown node type '${node.type}'`)
   }
 }
 
-function compileCombo(node) {
-  const { modifier, target } = node
+function compileEntry(node) {
+  if (node.type !== "popup") return compileAtom(node)
 
-  if (!MODIFIER_KEYS.includes(modifier)) {
-    throw new CompileError(
-      `'${modifier}(${target})': Termux macros only support CTRL/ALT/SHIFT/FN as modifier keys, got '${modifier}'`,
-    )
+  const main = compileAtom(node.main)
+  const popup = compileAtom(node.popupNode)
+
+  if (typeof main === "string") {
+    return { key: main, popup }
   }
+  if (main && typeof main === "object" && main.popup === undefined) {
+    return { ...main, popup }
+  }
+  throw new CompileError(`'${JSON.stringify(main)}': popup cannot be nested or followed by a key`)
+}
 
-  return { macro: `${modifier} ${target}`, display: `${modifier} ${target}` }
+export function compile(rows) {
+  return rows.map((row) => row.map(compileEntry))
 }
 
 export function toExtraKeysJson(rows) {
