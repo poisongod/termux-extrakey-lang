@@ -111,9 +111,9 @@ export function tokenize(src) {
       continue
     }
 
-    if (/[A-Za-z0-9_-]/.test(c)) {
+    if (/[A-Za-z0-9_]/.test(c)) {
       let j = i
-      while (j < src.length && /[A-Za-z0-9_-]/.test(src[j])) j++
+      while (j < src.length && /[A-Za-z0-9_]/.test(src[j])) j++
       tokens.push({ type: "IDENT", value: src.slice(i, j), line, column })
       column += j - i
       i = j

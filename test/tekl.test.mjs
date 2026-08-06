@@ -16,8 +16,12 @@ test("N: 命名单键输出紧凑字符串", () => {
   assert.deepEqual(comp("F12;"), [["F12"]])
 })
 
-test("N: [A-Za-z0-9_-]* 任意键名", () => {
-  assert.deepEqual(comp("A-1 my_key 2;"), [["A-1", "my_key", "2"]])
+test("N: [A-Za-z0-9_]* 任意键名", () => {
+  assert.deepEqual(comp("A_1 my_key 2;"), [["A_1", "my_key", "2"]])
+})
+
+test("N: 连字符不在键名字符集", () => {
+  assert.throws(() => parse("A-1;"), /unexpected character/)
 })
 
 test("S: 特殊修饰键作为单键按钮", () => {

@@ -6,7 +6,7 @@ N ::= "ESC" | "TAB" | "HOME" | "END" | "PGUP" | "PGDN" | "INS" | "DEL" | "BKSP"
     | "F11" | "F12"
     | "KEYBOARD" | "DRAWER"
     | "SCROLL" | "SPACE"
-    | [A-Za-z0-9_-]*
+    | [A-Za-z0-9_]*
 
 (* 特殊修饰键 *)
 S ::= "CTRL" | "ALT" | "FN" | "SHIFT"
