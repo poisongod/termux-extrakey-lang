@@ -1,79 +1,66 @@
 # PR (draft for discussion)
 
-> **title**: `feat(extra-keys): author extra-keys with the tekl DSL, bypassing JSON`
+> **title**: `feat(extra-keys): add an optional tekl DSL authoring path for extra-keys`
 
 ---
 
 ## 0 TL;DR
 
-- Adds an optional `extra-keys-tekl` property holding tekl source.
-- Ships a ~300-line pure-Kotlin compiler producing Termux's internal
-  `ExtraKeyButton` model directly — **no JSON round-trip**.
-- `extra-keys` (JSON) keeps working unchanged as a legacy read-only path.
-- tekl is rejected at compile time with line+column; rendering is untouched.
-- Zero new dependencies; same GPLv3.
+This is a proposal, not a replacement plan. It adds an **optional** way to author
+`extra-keys`:
+
+- A new `extra-keys-tekl` property holds tekl source.
+- A ~300-line pure-Kotlin compiler turns it straight into Termux's internal
+  `ExtraKeyButton` model — no JSON round-trip.
+- The existing `extra-keys` JSON path stays **exactly as it is**; legacy configs keep
+  working; nothing is migrated or removed.
+- tekl errors are caught at compile time with line + column.
+- Zero new dependencies; GPLv3.
 
 ---
 
-## 1 Why now: the evidence is already in this repo's issue tracker
+## 1 Background and motivation
 
-### 1.1 The maintainer already called the current format unfixable
+### 1.1 `extra-keys` is a config surface many users touch, and authoring has friction
 
-**#4589** ("extra-keys of termux.properties malfunctioning", open):
+JSON was a reasonable choice when `extra-keys` launched; it is a well-known format and
+maps directly to the internal model. Over time, a few friction points have surfaced in
+user reports:
 
-> "The backslash handling of `extra-keys` is glitchy (demonstrable by `"\u005c"` alike).
-> But **likely unfixable at this point**." — maintainer
+- **Escaping**: `termux.properties` adds its own escaping rules on top of JSON's. Getting
+  characters like `\` or quotes right through two escaping layers is a common source of
+  user confusion (e.g. issues around `\` and quotes in `extra-keys` values).
+- **No positioned diagnostics**: a parse failure surfaces as a load-time
+  `JSONException` without a line or column, so users must debug the whole string by eye.
+- **Verbosity**: a single combo key (`CTRL+C`) needs
+  `{"macro":"CTRL C","display":"CTRL C"}`; rows of a dozen keys become hard to read,
+  and there is no natural way to add a comment.
 
-The author of #4386 tried `'\\'`, `"\\\\"` and `"\u005c"` — all error — just to get one
-`\` key. The accepted solution is to memorize the magic keyword `BACKSLASH`.
+None of this is anyone's fault — it is the inherent shape of "JSON inside
+`.properties`". It is also not something this PR tries to "fix away"; it simply offers a
+second, friendlier authoring surface next to the existing one.
 
-**Root cause**: `extra-keys` is JSON buried inside a `.properties` double-escaping
-context. Two escaping languages collide inside one string. Any "fix" to the JSON path is
-another patch in that same maze — which is why the maintainer says it is not fixable.
+### 1.2 Users already build their own authoring tools
 
-**tekl has no escapes**: keys are identifiers (`ESC`, `TAB`, `CTRL`…). The class of bugs
-in #4386/#4589 literally cannot exist, because there is no embedded string/JSON layer.
+Because the JSON path is unforgiving, users in the wild have created helper scripts that
+edit `extra-keys` in `termux.properties` and reload settings — including setups shared in
+community posts. That is a signal: people want a higher-level, safer way to author their
+keyboard. tekl is a formalization of exactly that: a small language with a compiler, so
+the "helper script" becomes maintainable and validated.
 
-### 1.2 The maintainer already prescribes the alternative — let's do it properly
+### 1.3 Precedent: a keyboard layout is a small language
 
-**#3601** ("Support for multiple sets of extra-keys", feature request):
-
-> "For now you can also create a **script yourself** that dynamically sets required
-> `extra-keys` value in properties file and runs `termux-reload-settings`."
-
-Users want dynamic/complex keyboards. The recommended workaround is a hand-rolled bash
-script doing `sed` on `termux.properties`. That is exactly what a proper toolchain should
-replace:
-
-| Maintainer's workaround today | tekl proposal |
-| --- | --- |
-| user-written bash + `sed` on JSON string | `termux-extrakey-tekl keyboard.tekl --watch` |
-| string surgery, no validation | compiler: parse + semantic checks + warnings |
-| JSON error at load, no position | compile error with line/column + caret |
-| one-off, unmaintainable | a language, a compiler, a CLI — reusable, testable |
-
-This PR ships the compiler itself; the CLI (`termux-extrakey-tekl`, `--watch`,
-`--reload`) is the existing companion tool from the same language project.
-
-### 1.3 The community teaches around it
-
-Third-party tutorials (e.g. blog.vinfall.com) tell readers the *official sample* fails
-with a JSON parse error after `termux-reload-settings`; every guide ends with a
-memorized-correct snippet. Extra-keys authoring is the most user-visible, most
-error-prone configuration surface Termux has — and it currently teaches by fire.
+A layout is a matrix of cells with a small fixed semantics (plain key / combo / label /
+popup). Key-binding configs in vim, zsh or ssh chose DSLs over JSON for the same reason:
+the format follows the structure of the thing being configured, rather than the other way
+around. Termux already treats `extra-keys` as a shareable, agnostic component in
+`termux-shared`; a DSL authoring path fits that direction.
 
 ---
 
-## 2 Why a DSL, and why this DSL
+## 2 What tekl looks like
 
-### 2.1 `extra-keys` is a small language already
-
-A keyboard layout is a matrix; each cell has a tiny fixed semantics: plain key / combo /
-label / popup. That is a DSL by nature. JSON describes it only with 3–5× overhead,
-no comments, and no load-time diagnostics. Key-binding configs in vim/zsh/ssh are DSLs —
-not JSON — for the same reason.
-
-### 2.2 tekl is minimal and Termux-native
+### 2.1 Grammar (four productions)
 
 ```
 N ::= "ESC" | "TAB" | ... | [A-Za-z0-9_]*   // plain keys
@@ -91,58 +78,67 @@ M ::= A | A.A | M M | M'\n' | M';\n'
 | `CTRL(C):copy.F5` | combo+label+popup | `{"macro":"CTRL C","display":"copy","popup":"F5"}` |
 | `;` | new row | — |
 
-Every reserved word is an existing Termux key name; the grammar is four productions and
-the compiler is a pure function (~300 lines, no Android API, unit-testable).
+All reserved words are existing Termux key names. Keys are identifiers, so the
+double-escaping scenarios above cannot occur by construction.
 
-### 2.3 Author-facing checks that JSON cannot offer
+### 2.2 Authoring benefits
 
-- **Rejects at compile time** (line + column + caret): unbalanced `(`, popup-in-popup,
-  duplicate modifier in a row (`CTRL CTRL`).
-- **Warns** (non-fatal): empty label, uneven row lengths, missing `DRAWER`/`KEYBOARD`.
-- Failures surface via the existing toast + `Logger` path.
-
-### 2.4 Future-proof: multiple keyboard sets
-
-#3601 asks for multiple `extra-keys` sets. A DSL solves this structurally — named
-configs/blocks in files — instead of inventing `extra-keys-1..9` property hacks. The
-maintainer already said the idea is "not bad for future"; tekl is the vocabulary that
-future can be built in.
+- **Positioned errors**: `CTRL(C` reports line/column with a caret instead of a generic
+  load-time failure.
+- **Compile-time warnings** (non-fatal): empty label, uneven row lengths, missing
+  `DRAWER`/`KEYBOARD`.
+- **Readability & diffability**: a row is one short line; comments are natural.
 
 ---
 
-## 3 Why this is cheap for the maintainer
+## 3 Design and footprint
 
-- **JSON path untouched**: `ExtraKeysInfo`'s `new JSONArray(...)` path stays exactly as is;
-  legacy configs keep working; no migration script.
-- **Rendering untouched**: `ExtraKeysView` sees the same model it sees today.
-- **Compiler is isolated**: a pure function in `termux-shared` (reusable by plugins, a
-  future TUI, and the existing `termux-extrakey-tekl` CLI), covered by unit tests
-  (tokenizer / parser / compiler / model mapping / error & warning matrices).
-- **Opt-in**: empty/absent `extra-keys-tekl` ⇒ behavior byte-identical to today.
-- **Already battle-tested**: the compiler exists (JS reference in
-  `poisongod/termux-extrakey-lang`, GPLv3, 59 passing tests) — this PR is a port, not a
-  greenfield language design.
-
-## 4 Scope / files / success
+### 3.1 Integration
 
 ```
 termux-shared/.../TermuxPropertyConstants.java        +KEY_EXTRA_KEYS_TEKL
-termux-shared/.../extrakeys/ExtraKeysInfo.java        tekl branch → List<ExtraKeyButton>
-termux-shared/.../extrakeys/tekl/*.kt                  compiler (tokenizer/parser/compiler)
+termux-shared/.../extrakeys/ExtraKeysInfo.java        branch: tekl -> List<ExtraKeyButton>
+termux-shared/.../extrakeys/tekl/*.kt                  new compiler (tokenizer/parser/compiler)
 app/src/main/java/.../terminal/io/TermuxTerminalExtraKeys.java   read + dispatch
 app/src/test/...                                        tekl test suite
 ```
 
-Success:
+- `extra-keys` handling is untouched; when `extra-keys-tekl` is absent/empty, behavior is
+  byte-identical to today.
+- The compiler is a pure function (string → `List<ExtraKeyButton>`), no Android API, unit
+  testable in isolation — usable later by plugins or a TUI editor, and by the companion
+  CLI (`termux-extrakey-tekl`, with `--watch`/`--reload`), which is part of the same
+  language project.
+- Rendering (`ExtraKeysView`) sees the same model as today; no changes there.
 
-- Same keyboard in tekl is readable/writable in ~5 min, appears after
-  `termux-reload-settings`.
-- Typing `CTRL(C` yields a positioned diagnostic, not a silent empty row.
-- All existing JSON configs unchanged; CI green.
+### 3.2 Explicitly out of scope
 
-## 5 Open questions
+- No migration script, no default change, no removal of the JSON path.
+- tekl stays opt-in; JSON remains fully supported indefinitely.
 
-1. Dedicated `extra-keys-tekl` key vs value-prefix detection? (proposal: dedicated key)
-2. Keep JSON path read-only (proposal) vs drop?
-3. Sync strategy between Kotlin port and the JS reference?
-4. Diagnostics language: English (proposal) vs i18n?
+### 3.3 Maturity
+
+The language and compiler already exist and are exercised: the JS reference in
+`poisongod/termux-extrakey-lang` (GPLv3) has 59 passing tests covering grammar, model
+mapping, errors and warnings. This PR would be a port of that tested behavior, plus
+integration tests — not a greenfield design.
+
+---
+
+## 4 Success criteria
+
+- A user writes the same keyboard in tekl and it renders after `termux-reload-settings`.
+- A typo like `CTRL(C` produces a positioned message instead of a silent failure.
+- All existing JSON configs keep working; CI stays green.
+
+---
+
+## 5 Open questions (happy to follow maintainer guidance)
+
+1. Property discovery: dedicated `extra-keys-tekl` key vs value-prefix detection?
+   (leaning dedicated key, but flexible)
+2. Keep the JSON path read-only forever (leaning yes)?
+3. Sync strategy between the Kotlin port and the JS reference?
+4. Diagnostics language: English vs i18n?
+
+Thanks for reading — feedback very welcome.
