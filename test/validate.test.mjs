@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { validateExtraKeyJson, ValidationError } from "../src/tekl/validate-json.mjs"
+import { validateExtraKeyJson, ValidationError } from "../lib/tekl/validate-json.mjs"
 
 test("all supported Termux forms are valid", () => {
   const OK = [[

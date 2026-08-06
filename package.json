@@ -2,10 +2,15 @@
   "name": "termux-extrakey-tui",
   "version": "0.1.0",
   "type": "module",
-  "description": "OpenTUI app for Termux (Node 26.3+, --experimental-ffi)",
+  "description": "Termux extra-keys: tekl DSL toolchain + TUI editor (Node 26.3+)",
   "main": "src/app.mjs",
+  "bin": {
+    "tekl": "lib/tekl/cli.mjs",
+    "tekl-validate": "lib/tekl/tekl-validate.mjs"
+  },
   "scripts": {
-    "start": "node --experimental-ffi src/app.mjs"
+    "start": "node --experimental-ffi src/app.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@xincli/opentui-core": "^0.4.7",

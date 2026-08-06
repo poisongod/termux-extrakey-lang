@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { parseJsonDsl, JsonDslSyntaxError } from "../src/tekl/json-dsl.mjs"
-import { validateExtraKeyJson } from "../src/tekl/validate-json.mjs"
+import { parseJsonDsl, JsonDslSyntaxError } from "../lib/tekl/json-dsl.mjs"
+import { validateExtraKeyJson } from "../lib/tekl/validate-json.mjs"
 
 test("wikipedia toy-level valid DSL forms", () => {
   assert.deepEqual(parseJsonDsl(`[[ESC, TAB], {key: CTRL, display: "Ctrl"}]`), [
