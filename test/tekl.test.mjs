@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { parse, ParseError } from "../lib/tekl/parser.mjs"
-import { TokenizerError } from "../lib/tekl/tokenizer.mjs"
-import { compile, CompileError, collectWarnings, toExtraKeysJson } from "../lib/tekl/compiler.mjs"
+import { parse, ParseError } from "../lib/keys.mjs"
+import { TokenizerError } from "../lib/keys.mjs"
+import { compile, CompileError, collectWarnings, toExtraKeysJson } from "../lib/keys.mjs"
 
 // EBNF (tekl.ebnf)
 // N ::= 命名键 (ESC, TAB, ..., 或 [A-Za-z0-9_-]*)

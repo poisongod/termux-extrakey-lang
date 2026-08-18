@@ -6,11 +6,10 @@
   "license": "GPL-3.0-or-later",
   "main": "src/app.mjs",
   "bin": {
-    "termux-extrakey-tekl": "lib/tekl/cli.mjs",
-    "termux-extrakey-tjek": "lib/tjek/cli.mjs"
+    "termux-extrakey": "src/cli.mjs"
   },
   "scripts": {
-    "start": "node --experimental-ffi src/app.mjs",
+    "start": "node --experimental-ffi src/cli.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

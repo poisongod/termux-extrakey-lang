@@ -1,5 +1,8 @@
 # tjek — Termux Json Extended key language
 
+> 注: **合并前的旧文档** (保留参考)。工具链现为单文件插件 `lib/check.mjs`
+> (子命令 `termux-extrakey tjek <file|->` 不变); 以 `docs/design.md` 与测试为准。
+
 tjek 是 Termux 扩展键盘 JSON 的解析/校验工具链,复刻 Android `org.json.JSONTokener` 的宽松语法,用于直接解析与校验 termux.properties 中手写的 `extra-keys` JSON。
 
 - **JSON DSL 解析器** 与 Android `JSONTokener` 语义一致:key/值可省略引号、支持单双引号、数字、布尔、`\u` 转义、尾逗号
@@ -9,13 +12,13 @@ tjek 是 Termux 扩展键盘 JSON 的解析/校验工具链,复刻 Android `org.
 ## 使用
 
 ```bash
-termux-extrakey-tjek <file | ->   # '-' 从 stdin 读取
+termux-extrakey tjek <file | ->   # '-' 从 stdin 读取
 ```
 
 ## 宽松 JSON 语法
 
 ```bash
-termux-extrakey-tjek - <<'EOF'
+termux-extrakey tjek - <<'EOF'
 [
   [{key: ESC, popup: {macro: "CTRL f d", display: "tmux exit"}},
    {key: TAB, popup: {macro: "ALT a", display: A-a}}]
@@ -41,5 +44,5 @@ lib/tjek/
 ├── json-dsl.mjs       # Android JSONTokener 兼容的宽松 JSON 解析器
 ├── validate-json.mjs  # 四字段结构验证 (ExtraKeyButton 约束)
 ├── error-report.mjs   # 完整错误报告 (源码片段+行列+hint)
-└── cli.mjs            # termux-extrakey-tjek 命令
+└── cli.mjs            # termux-extrakey tjek 子命令
 ```

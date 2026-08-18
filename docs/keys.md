@@ -1,5 +1,8 @@
 # tekl — Termux Extra Key Language
 
+> 注: **合并前的旧文档** (保留参考)。工具链现为单文件插件 `lib/keys.mjs`
+> (子命令 `termux-extrakey tekl <file>` 不变), 布局源码示例为 `keys.layout`; 以 `docs/design.md` 与测试为准。
+
 tekl 是描述 Termux 扩展键盘 (`extra-keys`) 的领域语言及工具链:解析器、编译器与 CLI。
 
 - **tekl DSL** → 宽松 JSON DSL (`extra-keys = [...]`, 写入 `~/.termux/termux.properties`)
@@ -11,16 +14,16 @@ tekl 是描述 Termux 扩展键盘 (`extra-keys`) 的领域语言及工具链:�
 ```bash
 # Node.js 26.3+ (Termux: pkg install nodejs-lts)
 npm install
-npm link   # 提供 termux-extrakey-tekl 与 termux-extrakey-tjek 命令
+npm link   # 提供 termux-extrakey 唯一命令 (tekl 为子命令)
 ```
 
 ## 快速开始
 
 ```bash
-termux-extrakey-tekl keys.tekl                     # 编译并写入 ~/.termux/termux.properties
-termux-extrakey-tekl keys.tekl --output my.props   # 写入自定义文件
-termux-extrakey-tekl keys.tekl --reload            # 写入后调用 termux-reload-settings
-termux-extrakey-tekl keys.tekl --watch             # 监听文件, 改动自动重编译写入, 成功即退出
+termux-extrakey tekl keys.tekl                     # 编译并写入 ~/.termux/termux.properties
+termux-extrakey tekl keys.tekl --output my.props   # 写入自定义文件
+termux-extrakey tekl keys.tekl --reload            # 写入后调用 termux-reload-settings
+termux-extrakey tekl keys.tekl --watch             # 监听文件, 改动自动重编译写入, 成功即退出
 ```
 
 ## 语法 (tekl.ebnf)
@@ -90,7 +93,7 @@ lib/tekl/
 ├── compiler-io.mjs    # compileSource / updateProperties (原子写+验证) / reload
 ├── dsl-stringify.mjs  # 宽松 JSON DSL 序列化 (字段/标识符值裸写)
 ├── jit.mjs            # --watch 热重载 (成功即退出)
-└── cli.mjs            # termux-extrakey-tekl 命令
+└── cli.mjs            # termux-extrakey tekl 子命令
 ```
 
 ## 测试
