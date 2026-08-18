@@ -29,22 +29,24 @@ termux-extrakey --help
   `src/cli.mjs` 在 TUI 分支检测 `process.execArgv`, 缺则用 `spawnSync` 以该标志重执行。
   `tekl`/`tjek` 子命令不经过 FFI 分支。
 
-## 3. 用户主目录 (~/.termux/termux-extrakey/)
+## 3. 用户主目录 (~/.termux/)
 
-工具链运行时的规范所在, 首次启动自动补齐模板 (仓库模板复制, **不覆盖已有**):
+工具链运行时的规范所在, 直接以 `.termux` 为主目录 (不再套二级目录),
+首次启动自动补齐模板 (仓库模板复制, **不覆盖已有**):
 
 ```
-~/.termux/termux-extrakey/
-├── keys.layout          # 键盘布局源 (原 termux.tekl) — 默认编辑/编译对象
-├── behavior/
-│   └── init.behavior    # 主核心: 行为规则程序 (规则段+行为段)
-└── plugins/
-    └── init.mjs         # 插件系统入口: 装配动作插件 (export default 声明或声明数组)
+~/.termux/
+├── termux.properties   # 终端配置 (extra-keys 写盘目标)
+├── termux.tekl         # 键盘布局源 — 默认编辑/编译对象
+├── ui/
+│   └── init.ttoll      # 主核心: 行为规则程序 (规则段+行为段)
+└── id/
+    └── init.mjs        # 插件系统入口: 装配动作插件 (export default 声明或声明数组)
 ```
 
-- `keys.layout`: TUI 默认加载/保存的布局源; `tekl` 子命令默认输入。
-- `behavior/init.behavior`: 解释引擎的行为基座程序; 缺失时回退仓库内置模板。
-- `plugins/init.mjs`: 用户插件的单一装配入口; 加载器先读它, 再扫描同目录 `*.plugin.mjs`。
+- `termux.tekl`: TUI 默认加载/保存的布局源; `tekl` 子命令默认输入。
+- `ui/init.ttoll`: 解释引擎的行为基座程序; 缺失时回退仓库内置模板。
+- `id/init.mjs`: 用户插件的单一装配入口; 加载器先读它, 再扫描同目录 `*.plugin.mjs`。
 - provision 只创建缺失项, 打印提示, 不动用户已有文件。
 
 ## 4. 模块布局 (合并后的单文件插件)
@@ -93,7 +95,7 @@ lib/
 | tekl plugin/cap | `ctx.call("tekl", …)` | 插件名 `keys`, cap `keys.*` | 并入 `lib/keys.mjs` |
 | tjek plugin/cap | — | 插件名 `check`, cap `check.*` | 并入 `lib/check.mjs` |
 | tui plugin/cap | `tui.dispatch` … | 插件名 `ui`, cap `ui.*` | 并入 `lib/ui.mjs` |
-| tekl.ttoll (仓库基座) | `tekl.ttoll`, `keys.tekl` | 主核心模板 / 布局示例 | → `behavior/init.behavior`, `keys.layout` |
+| tekl.ttoll (仓库基座) | `tekl.ttoll`, `keys.tekl` | 主核心模板 / 布局示例 | → `ui/init.ttoll`, `termux.tekl` |
 
 - 插件注册名与 capability 前缀同步改名 (`kernel.call("keys", …)` / `ctx.resolve("ui.*")`)。
 - 对外命令与子命令名 (`tekl`/`tjek`) 保留为稳定接口, 不随内部改名。
@@ -117,7 +119,7 @@ lib/
   或 原语 (词汇表, 可按 `registerPrim` 扩展)。
 - 静态检查: 键/守卫/原语合法性, 动作必须有行为段定义, 模式 0 可达 (BFS)。
 - 运行时解释器在 ui.mjs (`mode` 域): 合并贡献 → 解析 → 查表 → 守卫 → 执行脚本 → hooks。
-- 行为程序源: 主目录 `behavior/init.behavior` (或缺省仓库模板) + 插件贡献 rules 拼接。
+- 行为程序源: 主目录 `ui/init.ttoll` (或缺省仓库模板) + 插件贡献 rules 拼接。
 - **核心文件零依赖**, 是纯语言层; 解释/原语在 ui.mjs。
 
 ## 8. 数据流 (界面)
