@@ -1,26 +1,57 @@
 // TUI 组件 (设计 §5 components/) — createElement 无 JSX,零构建。
 // 组件是纯展示: 从 store 快照读状态,不直接改 store。
+// 现代风格: 圆角容器 + 背景高亮 chip (光标/选中用 bg 高亮, 不堆逐格边框)。
 
 import { createElement } from "react"
 import { printEntry } from "../lib/keys.mjs"
 import { MATRIX, matrixCell } from "../lib/ui.mjs"
 
+// ── 配色 (暗色终端友好) ──────────────────────────────────────────────
+const ACCENT = "#00AAFF"
+const ACCENT_DIM = "#0A3550"
+const ACCENT_FG = "#A8E2FF"
+const GOLD = "#FFB84D"
+const GOLD_DIM = "#4A3410"
+const GOLD_FG = "#FFD9A0"
+const FG = "#E6E6E6"
+const DIM = "#8A8A8A"
+const PANEL_BORDER = "#3A3F47"
+const ERROR = "#FF7A6B"
+
 const ROW_MENU_ITEMS = ["行前新增行", "行后新增行", "删除当前行", "列前新增列", "列后新增列", "删除当前列"]
+const MODE_NAMES = { "0": "键盘编辑", "1": "主键编辑", "2": "弹出键编辑" }
+const MODES = ["0", "1", "2"]
+
+export function AppHeader() {
+  return createElement(
+    "box",
+    { flexDirection: "column" },
+    createElement("text", {
+      content: "  TERMUX-EXTRAKEY  ·  键盘布局编辑器",
+      fg: ACCENT,
+    }),
+    createElement("text", { content: "", fg: DIM }),
+  )
+}
 
 export function ModeBar({ mode }) {
-  const names = { "0": "键盘编辑", "1": "主键编辑", "2": "弹出键编辑" }
-  const modes = ["0", "1", "2"]
-  const content = modes
-    .map((m) => (m === mode ? `［${names[m]}］` : `[${names[m]}]`))
-    .join("  ")
-  return createElement("text", { content: `  ${content}  ` })
+  const chips = MODES.map((m) => {
+    const active = m === mode
+    return createElement("text", {
+      key: m,
+      content: `  ${m} · ${MODE_NAMES[m]}  `,
+      fg: active ? "#00222E" : DIM,
+      bg: active ? ACCENT : undefined,
+    })
+  })
+  return createElement("box", { flexDirection: "row", columnGap: 1 }, ...chips)
 }
 
 export function Grid({ state }) {
   const rows = state.rows
   const lines = []
   if (rows.length === 0) {
-    lines.push(createElement("text", { key: "empty", content: "  (空白键盘 — 用行列菜单添加按键)" }))
+    lines.push(createElement("text", { key: "empty", content: "  (空白键盘 — 用行列菜单添加按键)", fg: DIM }))
   }
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r]
@@ -28,27 +59,55 @@ export function Grid({ state }) {
       const isCursor = state.panel === "none" && state.cursor.r === r && state.cursor.c === c
       const isSelected = state.selected?.r === r && state.selected?.c === c
       const cell = printEntry(entry)
-      const border = isSelected ? "※" : isCursor ? "●" : " "
       return createElement("text", {
         key: c,
-        content: `${border}${cell}${border}`,
+        content: ` ${cell} `,
+        fg: isCursor ? ACCENT_FG : isSelected ? GOLD_FG : FG,
+        bg: isCursor ? ACCENT_DIM : isSelected ? GOLD_DIM : undefined,
       })
     })
-    lines.push(createElement("text", { key: `row${r}`, content: `  ${cells.map(c => c.props.content).join(" ")}` }))
+    lines.push(createElement("box", { key: `row${r}`, flexDirection: "row", columnGap: 1 }, ...cells))
   }
-  return createElement("box", { flexDirection: "column" }, lines)
+  return createElement(
+    "box",
+    {
+      border: true,
+      borderStyle: "rounded",
+      borderColor: PANEL_BORDER,
+      title: ` 键盘布局  ·  ${rows.length} 行  `,
+      titleColor: ACCENT,
+      padding: 1,
+      flexDirection: "column",
+      rowGap: 1,
+    },
+    ...lines,
+  )
 }
 
 export function MenuPanel({ state }) {
-  const items = ROW_MENU_ITEMS.map((label, i) => ({
-    content: `  ${i === state.menuHighlight ? "▸" : " "} ${label}`,
-    fg: i === state.menuHighlight ? [255, 215, 135] : undefined,
-  }))
+  const items = ROW_MENU_ITEMS.map((label, i) => {
+    const hi = i === state.menuHighlight
+    return createElement("text", {
+      key: i,
+      content: `  ${hi ? "▸" : " "} ${label}  `,
+      fg: hi ? GOLD_FG : FG,
+      bg: hi ? GOLD_DIM : undefined,
+    })
+  })
   return createElement(
     "box",
-    { border: true, title: "行列操作", flexDirection: "column" },
-    items.map((it, i) => createElement("text", { key: i, content: it.content })),
-    createElement("text", { content: "  ↑↓ 选择 · SPACE 执行 · ESC 关闭" }),
+    {
+      border: true,
+      borderStyle: "rounded",
+      borderColor: PANEL_BORDER,
+      title: " 行列操作 ",
+      titleColor: ACCENT,
+      padding: 1,
+      flexDirection: "column",
+      rowGap: 1,
+    },
+    ...items,
+    createElement("text", { key: "hint", content: "  ↑↓ 选择 · SPACE 执行 · ESC 关闭", fg: DIM }),
   )
 }
 
@@ -57,15 +116,12 @@ export function MatrixPanel({ state }) {
   const highlight = state.matrix.highlight
   const { cell: hcell } = matrixCell(highlight)
   const hkey = `${hcell.type}:${hcell.key}:${hcell.kind}`
-  const selectedMark = sel.has(hkey) ? "✓" : " "
   const lines = []
   lines.push(createElement("text", {
     key: "hdr",
-    content: `  已选: [${state.matrix.selected.map((a) => a.key).join(" ")}]  (Ctrl+↑↓←→ 累积)`,
+    content: `  已选: [${state.matrix.selected.map((a) => a.key).join(" ")}]`,
+    fg: DIM,
   }))
-  const idx = { i: 0 }
-  const rows = [["CTRL", "ALT", "FN", "SHIFT"].map((k) => ({ key: k, kind: "special" }))]
-  // 展平 MATRIX 为行 (按 matrixCell 的 row 分组)
   const byRow = new Map()
   for (let i = 0; i < MATRIX.length; i++) {
     const { row } = matrixCell(i)
@@ -78,22 +134,49 @@ export function MatrixPanel({ state }) {
       const key = `${cell.type}:${cell.key}:${cell.kind}`
       const isHi = i === highlight
       const mark = sel.has(key) ? "✓" : " "
-      const content = `[${mark}${isHi ? "●" : " "}${cell.key}]`
-      return createElement("text", { key: i, content })
+      const content = `${mark} ${cell.key}`
+      return createElement("text", {
+        key: i,
+        content: `  ${content}  `,
+        fg: sel.has(key) ? GOLD_FG : isHi ? ACCENT_FG : FG,
+        bg: isHi ? ACCENT_DIM : sel.has(key) ? GOLD_DIM : undefined,
+      })
     })
-    lines.push(createElement("text", { key: `m${rowIdx}`, content: cells.map(c => c.props.content).join(" ") }))
+    lines.push(createElement("box", { key: `m${rowIdx}`, flexDirection: "row", columnGap: 1 }, ...cells))
   }
-  lines.push(createElement("text", { key: "hint", content: "  ↑↓←→ 移动 · CTRL 选值 · ESC 完成" }))
-  return createElement("box", { border: true, title: "预设键值", flexDirection: "column" }, lines)
+  lines.push(createElement("text", { key: "hint", content: "  ↑↓←→ 移动 · CTRL 选值(可累积) · ESC 完成", fg: DIM }))
+  return createElement(
+    "box",
+    {
+      border: true,
+      borderStyle: "rounded",
+      borderColor: PANEL_BORDER,
+      title: " 预设键值 ",
+      titleColor: ACCENT,
+      padding: 1,
+      flexDirection: "column",
+      rowGap: 1,
+    },
+    ...lines,
+  )
 }
 
 export function NameInput({ state }) {
-  const title = state.mode === "1" ? "主键名" : "弹出键名"
+  const title = state.mode === "1" ? " 主键名 " : " 弹出键名 "
   return createElement(
     "box",
-    { border: true, title, flexDirection: "column" },
-    createElement("text", { content: `  [${state.nameDraft}_]` }),
-    createElement("text", { content: "  输入任意文本 · ENTER 确认 · ESC 取消" }),
+    {
+      border: true,
+      borderStyle: "rounded",
+      borderColor: PANEL_BORDER,
+      title,
+      titleColor: ACCENT,
+      padding: 1,
+      flexDirection: "column",
+      rowGap: 1,
+    },
+    createElement("text", { content: `  [${state.nameDraft}_]`, fg: ACCENT_FG }),
+    createElement("text", { content: "  输入任意文本 · ENTER 确认 · ESC 取消", fg: DIM }),
   )
 }
 
@@ -104,8 +187,16 @@ export function Problems({ state, services }) {
   if (msgs.length === 0) return createElement("text", { content: "" })
   return createElement(
     "box",
-    { border: true, title: "问题", flexDirection: "column" },
-    msgs.map((m, i) => createElement("text", { key: i, content: `  ⚠ ${m}` })),
+    {
+      border: true,
+      borderStyle: "rounded",
+      borderColor: ERROR,
+      title: " 问题 ",
+      titleColor: ERROR,
+      padding: 1,
+      flexDirection: "column",
+    },
+    msgs.map((m, i) => createElement("text", { key: i, content: `  ⚠ ${m}`, fg: ERROR })),
   )
 }
 
@@ -116,5 +207,5 @@ export function StatusBar({ state }) {
     matrix: "↑↓←→ 移动 · CTRL 选值(可累积) · ESC 完成",
     name: "输入文本 · ENTER 确认 · ESC 取消",
   }[state.panel] ?? ""
-  return createElement("text", { content: `  ${hint}` })
+  return createElement("text", { content: `  ${hint}`, fg: DIM })
 }

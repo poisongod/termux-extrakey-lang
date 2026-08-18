@@ -6,6 +6,7 @@ import { createElement, useEffect, useState } from "react"
 import { useKeyboard } from "@xincli/opentui-react"
 import { EFFECT } from "../lib/ui.mjs"
 import {
+  AppHeader,
   Grid,
   ModeBar,
   MenuPanel,
@@ -83,6 +84,7 @@ export function App({ file, services }) {
     "box",
     { flexDirection: "column", gap: 1 },
     ...[
+      createElement(AppHeader),
       createElement(ModeBar, { mode: snapshot.mode }),
       createElement(Grid, { state: snapshot }),
       snapshot.panel === "rowmenu" ? createElement(MenuPanel, { state: snapshot }) : null,
