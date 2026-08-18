@@ -3,6 +3,7 @@
 // 现代风格: 圆角容器 + 背景高亮 chip (光标/选中用 bg 高亮, 不堆逐格边框)。
 
 import { createElement } from "react"
+import { useTerminalDimensions } from "@xincli/opentui-react"
 import { printEntry } from "../lib/keys.mjs"
 import { MATRIX, matrixCell } from "../lib/ui.mjs"
 
@@ -21,6 +22,39 @@ const ERROR = "#FF7A6B"
 const ROW_MENU_ITEMS = ["行前新增行", "行后新增行", "删除当前行", "列前新增列", "列后新增列", "删除当前列"]
 const MODE_NAMES = { "0": "键盘编辑", "1": "主键编辑", "2": "弹出键编辑" }
 const MODES = ["0", "1", "2"]
+const CELL_MIN_W = 3
+
+// 比例分配: 宽度 ∝ 自然宽度, 最小 CELL_MIN_W, largest-remainder 补齐余额保证总和精确
+function distributeWidths(naturals, total, minW) {
+  const n = naturals.length
+  if (n === 0) return []
+  if (total <= 0) return naturals.map(() => 1)
+  const base = Math.max(1, Math.floor(total / n))
+  const min = Math.min(minW, base)
+  const sum = naturals.reduce((a, b) => a + b, 0) || n
+  const ex = naturals.map((w, i) => {
+    const exact = (w * total) / sum
+    return { i, lo: Math.floor(exact), frac: exact - Math.floor(exact) }
+  })
+  let used = ex.reduce((a, e) => a + e.lo, 0)
+  const order = [...ex].sort((a, b) => b.frac - a.frac)
+  let k = 0
+  while (used < total) {
+    ex[order[k % n].i].lo += 1
+    used += 1
+    k += 1
+  }
+  for (const e of ex) if (e.lo < min) e.lo = min
+  return ex.map((e) => e.lo)
+}
+
+// 把内容居中填充到指定列宽 (超出则截断), 保证每个键位格精确占 col 列
+function fitCell(content, col) {
+  if (col <= 0) return ""
+  if (content.length >= col) return content.slice(0, col)
+  const left = Math.floor((col - content.length) / 2)
+  return " ".repeat(left) + content + " ".repeat(col - content.length - left)
+}
 
 export function AppHeader() {
   return createElement(
@@ -48,6 +82,9 @@ export function ModeBar({ mode }) {
 }
 
 export function Grid({ state }) {
+  // 比例自适应: 键位宽 ∝ 键位文本 (单个键位适配行比例), 行总宽 = 终端列宽减边框内边距 (键盘适配终端)
+  const { width: cols = 80 } = useTerminalDimensions()
+  const inner = Math.max(4, cols - 4)
   const rows = state.rows
   const lines = []
   if (rows.length === 0) {
@@ -55,13 +92,16 @@ export function Grid({ state }) {
   }
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r]
+    const naturals = row.map((entry) => printEntry(entry).length + 2)
+    const rowWidth = Math.max(0, inner - Math.max(0, row.length - 1))
+    const widths = distributeWidths(naturals, rowWidth, CELL_MIN_W)
     const cells = row.map((entry, c) => {
       const isCursor = state.panel === "none" && state.cursor.r === r && state.cursor.c === c
       const isSelected = state.selected?.r === r && state.selected?.c === c
-      const cell = printEntry(entry)
+      const content = fitCell(printEntry(entry), widths[c])
       return createElement("text", {
         key: c,
-        content: ` ${cell} `,
+        content,
         fg: isCursor ? ACCENT_FG : isSelected ? GOLD_FG : FG,
         bg: isCursor ? ACCENT_DIM : isSelected ? GOLD_DIM : undefined,
       })
