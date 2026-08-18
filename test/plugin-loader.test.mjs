@@ -96,6 +96,19 @@ test("loader: 目录不存在时静默返回空", async () => {
   assert.equal(existsSync("/nonexistent-dir-xyz/init.mjs"), false)
 })
 
+test("loader: 用户目录裸包名 termux-extrakey/lib/*.mjs 被重写为内核绝对路径", async () => {
+  rmSync(TMP, { recursive: true, force: true })
+  mkdirSync(TMP, { recursive: true })
+  writeFileSync(
+    p("init-rewrite.mjs"),
+    `import { definePlugin } from "termux-extrakey/lib/ui.mjs"\n` +
+      `export default definePlugin({ name: "rewritten", contribute: { guards: { R: () => 42 } } })\n`,
+  )
+  const loaded = await loadPlugins(TMP, { entry: "init-rewrite.mjs", register: () => () => {} })
+  assert.equal(loaded[0].def.name, "rewritten")
+  assert.equal(loaded[0].def.contribute.guards.R(), 42)
+})
+
 test("loader: 包络后 rm 临时目录", () => {
   rmSync(TMP, { recursive: true, force: true })
 })

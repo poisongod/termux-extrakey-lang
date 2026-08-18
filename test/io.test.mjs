@@ -23,7 +23,7 @@ test("io: loadDoc 文件不存在返回空文档", async () => {
 test("io: loadDoc null 回退默认文件 (render 不传 file 时)", async () => {
   const { rows, file } = await loadDoc(null)
   assert.equal(file, defaultLayoutFile())
-  assert.equal(file, `${process.env.HOME}/.termux/termux-extrakey/keys.layout`)
+  assert.equal(file, `${process.env.HOME}/.termux/termux.tekl`)
   const { rows: viaUndef } = await loadDoc(undefined)
   assert.deepEqual(rows, viaUndef)
 })

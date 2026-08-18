@@ -24,7 +24,7 @@ npm test                  # 193 tests (kernel/transport/shared + behavior/ui 纯
 npm start                 # node --experimental-ffi src/cli.mjs (TUI dev)
 ```
 
-- CLI 单命令 `termux-extrakey`: 无子命令 → 默认启动 TUI; `tekl [file|default ~/.termux/termux-extrakey/keys.layout] [--output <props>] [--reload] [--watch]` 编译; `tjek <file|-|stdin>` 校验。tekl/tjek 不单设 bin (稳定子命令接口, 内部不改名)。`--watch` recompiles on change and **exits on first success**。
+- CLI 单命令 `termux-extrakey`: 无子命令 → 默认启动 TUI; `tekl [file|default ~/.termux/termux.tekl] [--output <props>] [--reload] [--watch]` 编译; `tjek <file|-|stdin>` 校验。tekl/tjek 不单设 bin (稳定子命令接口, 内部不改名)。`--watch` recompiles on change and **exits on first success**。
 - Shebangs in `src/cli.mjs` are Termux absolute paths (`/data/data/...`) — run via `node` or `npm link` outside Termux. 子命令实现 = `lib/keys.mjs` / `lib/check.mjs` 导出的 `run(argv)`。
 
 ## Key quirks

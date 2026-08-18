@@ -82,12 +82,14 @@ export function App({ file, services }) {
   return createElement(
     "box",
     { flexDirection: "column", gap: 1 },
-    createElement(ModeBar, { mode: snapshot.mode }),
-    createElement(Grid, { state: snapshot }),
-    snapshot.panel === "rowmenu" ? createElement(MenuPanel, { state: snapshot }) : null,
-    snapshot.panel === "matrix" ? createElement(MatrixPanel, { state: snapshot }) : null,
-    snapshot.panel === "name" ? createElement(NameInput, { state: snapshot }) : null,
-    createElement(Problems, { state: snapshot, services }),
-    createElement(StatusBar, { state: snapshot }),
+    ...[
+      createElement(ModeBar, { mode: snapshot.mode }),
+      createElement(Grid, { state: snapshot }),
+      snapshot.panel === "rowmenu" ? createElement(MenuPanel, { state: snapshot }) : null,
+      snapshot.panel === "matrix" ? createElement(MatrixPanel, { state: snapshot }) : null,
+      snapshot.panel === "name" ? createElement(NameInput, { state: snapshot }) : null,
+      createElement(Problems, { state: snapshot, services }),
+      createElement(StatusBar, { state: snapshot }),
+    ].filter(Boolean),
   )
 }

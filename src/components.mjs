@@ -101,7 +101,7 @@ export function Problems({ state, services }) {
   const store = services?.store
   const global = store?.getGlobalErrors ? store.getGlobalErrors() : []
   const msgs = [...(state.errors ?? []), ...global]
-  if (msgs.length === 0) return null
+  if (msgs.length === 0) return createElement("text", { content: "" })
   return createElement(
     "box",
     { border: true, title: "问题", flexDirection: "column" },
