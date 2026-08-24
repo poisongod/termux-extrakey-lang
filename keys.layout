@@ -6,15 +6,5 @@
 #   A(B):Label   combo renamed        -> {macro: "A B", display: Label}
 #   A.B          popup (A any atom)   -> {key: A, popup: B} / {macro: ..., popup: B}
 #   ;            keyboard row separator, \n is just a code newline
-
-ESC TAB CTRL ALT
-  HOME UP END PGUP
-  PGDN DOWN LEFT RIGHT
-  DEL BKSP INS;
-CTRL(C) ALT(A) FN(F) SHIFT(S)
-  CTRL(A):toggle ALT(x)
-  ESC.F1 HOME:Start TAB:Lbl
-  CTRL(C).F5;
-DRAWER KEYBOARD SCROLL SPACE ENTER
-  BACKSLASH QUOTE APOSTROPHE
-  F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12;
+ESC.DRAWER "["."{" "]"."}" "\\"."|" UP.HOME "="."+" KEYBOARD.CTRL(d);
+TAB."~" Ctrl Alt Left."<" Down.End Right.">" Enter.Paste;

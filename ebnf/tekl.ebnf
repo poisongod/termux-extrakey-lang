@@ -1,0 +1,90 @@
+Termux Extra key Language (tekl)
+EBNF Standard: ISO/IEC 14977
+
+(* N：按键名 *)
+(* S：修饰键 *)
+(* A：按键动作 *)
+(* G：Termux 全局配置项 *)
+(* M：键盘矩阵 *)
+(* P：完整 tekl 文件 *)
+
+N = 'ESC'
+  | 'TAB'
+  | 'HOME'
+  | 'END'
+  | 'PGUP'
+  | 'PGDN'
+  | 'INS'
+  | 'DEL'
+  | 'BKSP'
+  | 'UP'
+  | 'LEFT'
+  | 'RIGHT'
+  | 'DOWN'
+  | 'ENTER'
+  | 'BACKSLASH'
+  | 'QUOTE'
+  | 'APOSTROPHE'
+  | 'F1'
+  | 'F2'
+  | 'F3'
+  | 'F4'
+  | 'F5'
+  | 'F6'
+  | 'F7'
+  | 'F8'
+  | 'F9'
+  | 'F10'
+  | 'F11'
+  | 'F12'
+  | 'KEYBOARD'
+  | 'DRAWER'
+  | 'SCROLL'
+  | 'SPACE'
+  | 'PASTE'
+  | '"' { [^\n] } '"'
+  | "'" { [^\n] } "'"
+
+S = 'CTRL' | 'ALT' | 'FN' | 'SHIFT'
+
+A = N
+  | S
+  | A '(' A ')'
+  | A ':' N
+
+G = 'allow-external-apps' '=' ( 'true' | 'false' )
+  | 'default-working-directory' '=' '"' { [^\n] } '"'
+  | 'disable-terminal-session-change-toast' '=' ( 'true' | 'false' )
+  | 'hide-soft-keyboard-on-startup' '=' ( 'true' | 'false' )
+  | 'soft-keyboard-toggle-behaviour' '=' ( 'enable' | 'disable' )
+  | 'terminal-transcript-rows' '=' [0-9]+
+  | 'volume-keys' '=' ( 'volume' | 'keyboard' | 'off' )
+  | 'fullscreen' '=' ( 'true' | 'false' )
+  | 'use-fullscreen-workaround' '=' ( 'true' | 'false' )
+  | 'terminal-cursor-blink-rate' '=' [0-9]+
+  | 'terminal-cursor-style' '=' ( 'block' | 'bar' | 'underline' )
+  | 'extra-keys-style' '=' ( 'default' | 'arrows-only' | 'arrows-all' | 'all' | 'none' )
+  | 'extra-keys-text-all-caps' '=' ( 'true' | 'false' )
+  | 'use-black-ui' '=' ( 'true' | 'false' )
+  | 'disable-hardware-keyboard-shortcuts' '=' ( 'true' | 'false' )
+  | 'shortcut.create-session' '=' A
+  | 'shortcut.next-session' '=' A
+  | 'shortcut.previous-session' '=' A
+  | 'shortcut.rename-session' '=' A
+  | 'bell-character' '=' ( 'vibrate' | 'beep' | 'ignore' )
+  | 'back-key' '=' ( 'escape' | 'back' )
+  | 'enforce-char-based-input' '=' ( 'true' | 'false' )
+  | 'ctrl-space-workaround' '=' ( 'true' | 'false' )
+  | 'terminal-margin-horizontal' '=' [0-9]+
+  | 'terminal-margin-vertical' '=' [0-9]+
+  | 'use-custom-tabs' '=' ( 'true' | 'false' )
+  | 'custom-tabs' '=' '[' { [^\n] } ']'
+  | 'long-press-delay' '=' [0-9]+
+
+M = A
+  | A '.' A
+  | M M
+  | M '\n'
+  | M ';\n'
+
+P = { G '\n' } { M }

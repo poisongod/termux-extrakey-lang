@@ -1,0 +1,31 @@
+[package]
+name = "tekl"
+version = "0.3.0"
+edition = "2021"
+description = "Termux Extra key Language (tekl) DSL compiler + TUI editor + hot-deploy"
+license = "GPL-3.0-or-later"
+default-run = "tekl"
+
+[[bin]]
+name = "tekl"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+anyhow = "1"
+thiserror = "2"
+tempfile = "3"
+dirs = "6"
+rhai = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
