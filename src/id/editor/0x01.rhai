@@ -1,5 +1,5 @@
 // 光标左移
 #{
     desc: "光标左移",
-    run: || cursor("left")
+    run: || if cursor_col() > 0 { set_cursor(cursor_row(), cursor_col() - 1) }
 }

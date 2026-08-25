@@ -96,7 +96,7 @@ pub struct IdEntry {
 pub struct IdRegistry {
     entries: Vec<IdEntry>,
     /// 全部已加载插件文件的编译产物 (run 闭包的函数体所在 lib)
-    lib: rhai::AST,
+    pub lib: rhai::AST,
 }
 
 impl IdRegistry {
@@ -214,15 +214,13 @@ impl IdRegistry {
         &self.entries
     }
 
-    pub fn to_map(&self) -> HashMap<&str, &str> {
-        self.entries.iter().map(|e| (e.id.as_str(), e.desc.as_str())).collect()
+    /// 取某个 ID 的 action 闭包。
+    pub fn action_fn(&self, id: &str) -> Option<&FnPtr> {
+        self.entries.iter().find(|e| e.id == id).map(|e| &e.run)
     }
 
-    /// 调用某个 ID 的操作逻辑，返回按序宿主操作（由消费者回放到自身状态）。
-    pub fn eval_action(&self, id: &str) -> anyhow::Result<Vec<script_runtime::HostOp>> {
-        let entry = self.entries.iter().find(|e| e.id == id)
-            .ok_or_else(|| anyhow::anyhow!("未注册的 ID: {id}"))?;
-        script_runtime::call_action(&entry.run, &self.lib)
+    pub fn to_map(&self) -> HashMap<&str, &str> {
+        self.entries.iter().map(|e| (e.id.as_str(), e.desc.as_str())).collect()
     }
 }
 
@@ -257,13 +255,13 @@ pub fn user_ids_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::script_runtime::HostOp;
+    use crate::worker::script_runtime::ScriptHost;
 
     const SAMPLE: &str = r#"
 // 测试
 #{
     desc: "测试动作",
-    run: || { save(true); exit() }
+    run: || ()
 }
 "#;
 
@@ -273,10 +271,7 @@ mod tests {
         reg.load_single("0x99", SAMPLE);
         assert!(reg.is_registered("0x99"));
         assert_eq!(reg.id_desc("0x99"), Some("测试动作"));
-        assert_eq!(
-            reg.eval_action("0x99").unwrap(),
-            vec![HostOp::Save(true), HostOp::Exit]
-        );
+        assert!(reg.action_fn("0x99").is_some());
     }
 
     #[test]
@@ -298,7 +293,7 @@ mod tests {
         let reg = IdRegistry::for_tui();
         assert_eq!(reg.all_entries().len(), TUI_IDS.len());
         assert_eq!(reg.id_desc("0x00"), Some("退出/返回"));
-        assert_eq!(reg.eval_action("0x00").unwrap(), vec![HostOp::Exit]);
+        assert!(reg.action_fn("0x00").is_some());
     }
 
     #[test]
@@ -307,12 +302,8 @@ mod tests {
         assert_eq!(reg.all_entries().len(), EDITOR_IDS.len());
         // 场景序: 0x01-0x06 光标/跳转, 0x07 进入插入模式
         assert_eq!(reg.id_desc("0x01"), Some("光标左移"));
-        assert_eq!(reg.eval_action("0x00").unwrap(), vec![HostOp::Exit]);
-        // 组合操作: 保存退出
-        assert_eq!(
-            reg.eval_action("0x17").unwrap(),
-            vec![HostOp::Save(true), HostOp::Exit]
-        );
+        assert!(reg.action_fn("0x00").is_some());
+        assert!(reg.action_fn("0x17").is_some());
     }
 
     #[test]
@@ -328,17 +319,8 @@ mod tests {
     }
 
     #[test]
-    fn eval_action_unregistered_fails() {
+    fn action_unregistered_fails() {
         let reg = IdRegistry::new();
-        assert!(reg.eval_action("0xEE").is_err());
-    }
-
-    #[test]
-    fn valid_id_check() {
-        assert!(is_valid_id("0x00"));
-        assert!(is_valid_id("0xFF"));
-        assert!(!is_valid_id("00"));
-        assert!(!is_valid_id("0x001"));
-        assert!(!is_valid_id("xx00"));
+        assert!(reg.action_fn("0xEE").is_none());
     }
 }

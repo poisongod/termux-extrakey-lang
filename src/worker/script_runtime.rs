@@ -1,174 +1,111 @@
-//! Rhai 脚本运行时 — 记录-回放模式执行 ID 插件 action。
+//! Rhai 脚本运行时 — 直接执行模型。
 //!
-//! action 代码调用注册的宿主函数时，引擎只**记录**类型化操作（HostOp），
-//! 由消费者（App / EditorState）在 Rust 侧同步回放到自身状态。
-//! 好处：脚本求值无副作用、无需跨线程共享 TUI 状态、操作可测试。
+//! 消费者把自身状态包进 `Arc<Mutex<S>>`，注册细粒度原语（读+写）时捕获该句柄。
+//! ID 插件的 `run` 闭包在此之上组合出真实逻辑——读状态、做判断、写状态，
+//! 全部发生在 `.rhai` 文件内。无中间操作层。
 
 use anyhow::Result;
-use rhai::Engine;
+use rhai::{Engine, FnPtr};
 use std::sync::{Arc, Mutex};
 
-/// 宿主操作 — Rhai 宿主函数调用的类型化记录。
-#[derive(Debug, Clone, PartialEq)]
-pub enum HostOp {
-    Exit,
-    SetMode(u8),
-    Focus(String),
-    AddRow(String),
-    AddCol(String),
-    DelRow,
-    DelCol,
-    SwapRow,
-    SwapCol,
-    SelectKey,
-    SwapKey,
-    ShowMatrix(String),
-    InputValue(String),
-    InputName(String),
-    Apply,
-    Cursor(String),
-    Jump(String),
-    DeleteChar,
-    NewLine(String),
-    DeleteLine,
-    TogglePanel(String),
-    InsertText(String),
-    Backspace,
-    ExecCmd,
-    Save(bool),
-    CancelCmd,
+/// 引擎 + 注册池 AST 的打包体 —— 每个消费者持有一份。
+pub struct ScriptHost {
+    pub engine: Engine,
+    pub lib: rhai::AST,
 }
 
-type OpLog = Arc<Mutex<Vec<HostOp>>>;
-
-fn push_op(log: &OpLog, op: HostOp) -> std::result::Result<(), Box<rhai::EvalAltResult>> {
-    log.lock().unwrap().push(op);
-    Ok(())
+impl ScriptHost {
+    /// 调用一个已加载的 action 闭包（来自 `<ID>.rhai` 的 `run` 字段）。
+    /// 闭包通过捕获在引擎里的状态句柄直接读写消费者状态。
+    pub fn call(&self, run: &FnPtr) -> Result<()> {
+        run.call::<()>(&self.engine, &self.lib, ())
+            .map_err(|e| anyhow::anyhow!("action error: {e}"))
+    }
 }
 
-/// 创建记录型引擎：宿主函数调用被记录为 HostOp 序列。
-pub fn create_engine(log: OpLog) -> Engine {
-    let mut engine = Engine::new();
-
-    macro_rules! reg0 {
-        ($name:literal, $op:expr) => {{
-            let l = log.clone();
-            engine.register_fn($name, move || -> std::result::Result<(), Box<rhai::EvalAltResult>> {
-                push_op(&l, $op)
-            });
-        }};
-    }
-    macro_rules! reg1s {
-        ($name:literal, $variant:ident) => {{
-            let l = log.clone();
-            engine.register_fn($name, move |a: &str| -> std::result::Result<(), Box<rhai::EvalAltResult>> {
-                push_op(&l, HostOp::$variant(a.to_string()))
-            });
-        }};
-    }
-
-    // ── 系统 ──
-    reg0!("exit", HostOp::Exit);
-    {
-        let l = log.clone();
-        engine.register_fn("set_mode", move |n: i64| -> std::result::Result<(), Box<rhai::EvalAltResult>> {
-            push_op(&l, HostOp::SetMode(n as u8))
-        });
-    }
-
-    // ── 矩阵编辑 ──
-    reg1s!("focus", Focus);
-    reg1s!("add_row", AddRow);
-    reg1s!("add_col", AddCol);
-    reg0!("del_row", HostOp::DelRow);
-    reg0!("del_col", HostOp::DelCol);
-    reg0!("swap_row", HostOp::SwapRow);
-    reg0!("swap_col", HostOp::SwapCol);
-    reg0!("select_key", HostOp::SelectKey);
-    reg0!("swap_key", HostOp::SwapKey);
-
-    // ── 面板/输入 ──
-    reg1s!("show_matrix", ShowMatrix);
-    reg1s!("input_value", InputValue);
-    reg1s!("input_name", InputName);
-    reg0!("apply", HostOp::Apply);
-
-    // ── 文本编辑器 ──
-    reg1s!("cursor", Cursor);
-    reg1s!("jump", Jump);
-    reg0!("delete_char", HostOp::DeleteChar);
-    reg1s!("new_line", NewLine);
-    reg0!("delete_line", HostOp::DeleteLine);
-    reg1s!("toggle_panel", TogglePanel);
-    reg1s!("insert_text", InsertText);
-    reg0!("backspace", HostOp::Backspace);
-    reg0!("exec_cmd", HostOp::ExecCmd);
-    {
-        let l = log.clone();
-        engine.register_fn("save", move |v: bool| -> std::result::Result<(), Box<rhai::EvalAltResult>> {
-            push_op(&l, HostOp::Save(v))
-        });
-    }
-    reg0!("cancel_cmd", HostOp::CancelCmd);
-
-    engine
-}
-
-/// 调用一个已加载的 action 闭包（来自 .rhai 插件的 `run` 字段），
-/// 返回按序记录的宿主操作。`ast` 为插件编译产物（闭包函数体所在 lib）。
-pub fn call_action(run: &rhai::FnPtr, ast: &rhai::AST) -> Result<Vec<HostOp>> {
-    let log: OpLog = Arc::new(Mutex::new(Vec::new()));
-    let engine = create_engine(log.clone());
-    run.call::<()>(&engine, ast, ())
-        .map_err(|e| anyhow::anyhow!("action error: {e}"))?;
-    let ops = log.lock().unwrap().clone();
-    Ok(ops)
-}
-
+/// 把共享状态句柄注册为 Rhai 类型并构建引擎的标准姿势：
+///
+/// ```ignore
+/// let mut engine = Engine::new();
+/// engine.register_type_with_name::<Arc<Mutex<S>>>("State");
+/// // 读原语: 闭包捕获句柄克隆
+/// engine.register_fn("cursor_row", move || handle.lock().unwrap().row);
+/// // 写原语
+/// engine.register_fn("set_cursor", move |r: i64, c: i64| { ... });
+/// ```
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    /// 从内联插件源码提取某 ID 的 run 闭包再调用（模拟完整链路）。
-    fn run_of(src: &str, id: &str) -> (rhai::FnPtr, rhai::AST) {
-        let engine = Engine::new();
+    /// 演示用消费者状态
+    #[derive(Default)]
+    struct Demo {
+        row: i64,
+        col: i64,
+        rows: i64,
+    }
+
+    /// 构建演示引擎: 句柄类型 + 读/写原语
+    fn demo_engine(handle: Arc<Mutex<Demo>>) -> Engine {
+        let mut engine = Engine::new();
+        engine.register_type_with_name::<Arc<Mutex<Demo>>>("Demo");
+        engine.register_fn("to_string", |s: &Arc<Mutex<Demo>>| "Demo".to_string());
+
+        // 读原语 — 让 .rhai 能做条件判断
+        {
+            let h = handle.clone();
+            engine.register_fn("cursor_row", move || h.lock().unwrap().row);
+        }
+        {
+            let h = handle.clone();
+            engine.register_fn("row_count", move || h.lock().unwrap().rows);
+        }
+        // 写原语
+        {
+            let h = handle.clone();
+            engine.register_fn("set_cursor", move |r: i64, c: i64| {
+                let mut d = h.lock().unwrap();
+                d.row = r;
+                d.col = c;
+            });
+        }
+        engine
+    }
+
+    #[test]
+    fn plugin_reads_and_writes_state() {
+        let handle = Arc::new(Mutex::new(Demo { row: 3, col: 1, rows: 10 }));
+        let engine = demo_engine(handle.clone());
+
+        // 插件源码: 带守卫的真实逻辑
+        let src = r#"
+// 上移: 有上一行才动
+#{ desc: "上移", run: ||
+    if cursor_row() > 0 { set_cursor(cursor_row() - 1, 1) }
+}
+"#;
         let ast = engine.compile(src).unwrap();
         let map: rhai::Map = engine.eval_ast(&ast).unwrap();
-        let f = map.get(id).unwrap().clone().cast::<rhai::Map>()
-            .get("run").unwrap().clone().cast::<rhai::FnPtr>();
-        (f, ast)
+        let run = map.get("run").unwrap().clone().cast::<FnPtr>();
+
+        run.call::<()>(&engine, &ast, ()).unwrap();
+        assert_eq!(handle.lock().unwrap().row, 2);
+
+        // 边界: 已在第 0 行则不动
+        handle.lock().unwrap().row = 0;
+        run.call::<()>(&engine, &ast, ()).unwrap();
+        assert_eq!(handle.lock().unwrap().row, 0);
     }
 
     #[test]
-    fn test_call_exit_closure() {
-        let (f, ast) = run_of(r#"#{ "0x00": #{ desc: "d", run: || exit() } }"#, "0x00");
-        assert_eq!(call_action(&f, &ast).unwrap(), vec![HostOp::Exit]);
-    }
-
-    #[test]
-    fn test_call_sequence_closure() {
-        let (f, ast) = run_of(
-            r#"#{ "0x76": #{ desc: "d", run: || { save(true); exit() } } }"#,
-            "0x76",
-        );
-        assert_eq!(call_action(&f, &ast).unwrap(), vec![HostOp::Save(true), HostOp::Exit]);
-    }
-
-    #[test]
-    fn test_string_args_recorded() {
-        let (f, ast) = run_of(
-            r#"#{ "0x10": #{ desc: "d", run: || focus("up") } }"#,
-            "0x10",
-        );
-        assert_eq!(call_action(&f, &ast).unwrap(), vec![HostOp::Focus("up".into())]);
-    }
-
-    #[test]
-    fn test_unknown_function_errors() {
-        let (f, ast) = run_of(
-            r#"#{ "0xEE": #{ desc: "d", run: || no_such_fn() } }"#,
-            "0xEE",
-        );
-        assert!(call_action(&f, &ast).is_err());
+    fn unknown_function_errors() {
+        let handle = Arc::new(Mutex::new(Demo::default()));
+        let engine = demo_engine(handle);
+        let src = r#"#{ desc: "坏", run: || no_such_fn() }"#;
+        let ast = engine.compile(src).unwrap();
+        let map: rhai::Map = engine.eval_ast(&ast).unwrap();
+        let run = map.get("run").unwrap().clone().cast::<FnPtr>();
+        assert!(run.call::<()>(&engine, &ast, ()).is_err());
     }
 }

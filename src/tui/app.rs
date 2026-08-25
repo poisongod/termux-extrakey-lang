@@ -18,8 +18,9 @@ use crate::lib::keys::{self, AstNode, KeyKind, ParseResult};
 use crate::lib::keyset;
 use crate::lib::behavior;
 use crate::lib::id;
-use crate::worker::script_runtime;
+use crate::worker::script_runtime::{self, ScriptHost};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 // ── Mode ─────────────────────────────────────────────────────────────
 
@@ -540,11 +541,23 @@ impl App {
 
 // ── Event handling ───────────────────────────────────────────────────
 
-fn handle_event(app: &mut App, key: KeyEvent) {
+fn handle_event(ctx: &TuiCtx, key: KeyEvent) {
+    // 阶段一: 短暂持锁完成路由决策, 产出待执行动作
+    let pending = {
+        let mut app = ctx.app.lock().unwrap();
+        handle_event_inner(&mut app, key)
+    };
+    // 阶段二: 无锁状态下直接执行 Rhai 动作 (引擎内部自行加锁)
+    if let Some(action_id) = pending {
+        execute_action(ctx, &action_id);
+    }
+}
+
+fn handle_event_inner(app: &mut App, key: KeyEvent) -> Option<String> {
     // Insert menu captures all input
     if app.show_insert_menu {
         handle_insert_menu(app, key);
-        return;
+        return None;
     }
 
     // Edit/Popup mode: ESC and Enter go through ttoll dispatch, text input is internal
@@ -555,8 +568,7 @@ fn handle_event(app: &mut App, key: KeyEvent) {
             if let Some(key_name) = key_name {
                 let current_mode = app.mode.as_hex().to_string();
                 if let Some(action_id) = behavior::dispatch(&app.ttoll_table, &current_mode, &key_name) {
-                    execute_action(app, &action_id);
-                    return;
+                    return Some(action_id);
                 }
             }
         }
@@ -564,13 +576,12 @@ fn handle_event(app: &mut App, key: KeyEvent) {
         if let Some(chord) = crossterm_to_chord(key) {
             let current_mode = app.mode.as_hex().to_string();
             if let Some(action_id) = behavior::dispatch_chord(&app.ttoll_table, &current_mode, &chord) {
-                execute_action(app, &action_id);
-                return;
+                return Some(action_id);
             }
         }
         // Text input is internal
         handle_edit(app, key);
-        return;
+        return None;
     }
 
     // Normal mode: full ttoll dispatch
@@ -578,8 +589,7 @@ fn handle_event(app: &mut App, key: KeyEvent) {
     if let Some(chord) = crossterm_to_chord(key) {
         let current_mode = app.mode.as_hex().to_string();
         if let Some(action_id) = behavior::dispatch_chord(&app.ttoll_table, &current_mode, &chord) {
-            execute_action(app, &action_id);
-            return;
+            return Some(action_id);
         }
     }
 
@@ -588,9 +598,10 @@ fn handle_event(app: &mut App, key: KeyEvent) {
     if let Some(key_name) = key_name {
         let current_mode = app.mode.as_hex().to_string();
         if let Some(action_id) = behavior::dispatch(&app.ttoll_table, &current_mode, &key_name) {
-            execute_action(app, &action_id);
+            return Some(action_id);
         }
     }
+    None
 }
 
 /// Convert crossterm KeyEvent to DSL key name for ttoll dispatch.
@@ -672,83 +683,25 @@ fn crossterm_to_chord(key: KeyEvent) -> Option<Vec<String>> {
 ///   0x40-0x42  主键编辑
 ///   0x50-0x53  弹出键编辑
 ///
-/// 无硬编码：ID → action 由注册池提供（Rhai），此处仅回放宿主操作。
-fn execute_action(app: &mut App, action_id: &str) {
-    if !app.id_registry.is_registered(action_id) {
+/// 无硬编码：ID → run 闭包由注册池提供（.rhai），此处直接执行，
+/// 插件通过引擎内注册的原语读写 TUI 状态。
+fn execute_action(ctx: &TuiCtx, action_id: &str) {
+    if !ctx.registry.is_registered(action_id) {
+        let mut app = ctx.app.lock().unwrap();
         app.status_msg = format!("未知 ID: {}", action_id);
         app.status_is_error = true;
         return;
     }
 
-    let ops = match app.id_registry.eval_action(action_id) {
-        Ok(ops) => ops,
-        Err(e) => {
-            app.status_msg = format!("action 错误: {e}");
-            app.status_is_error = true;
-            return;
-        }
+    let run = match ctx.registry.action_fn(action_id) {
+        Some(r) => r.clone(),
+        None => return,
     };
 
-    for op in &ops {
-        apply_host_op(app, op);
-    }
-}
-
-/// 宿主操作回放 — HostOp → App 状态变更。
-fn apply_host_op(app: &mut App, op: &script_runtime::HostOp) {
-    use script_runtime::HostOp;
-    match op {
-        // ── 系统 ──
-        HostOp::Exit => { app.should_quit = true; }
-        HostOp::SetMode(n) => match *n {
-            0x01 => { app.mode = Mode::Normal; app.status_msg.clear(); }
-            0x02 => { app.enter_edit_mode(); }
-            0x03 => { app.enter_popup_mode(); }
-            _ => {}
-        },
-        // ── 焦点 ──
-        HostOp::Focus(dir) => match dir.as_str() {
-            "up" => { if app.cursor.0 > 0 { app.cursor.0 -= 1; app.clamp_cursor(); } }
-            "down" => { if app.cursor.0 + 1 < app.row_count() { app.cursor.0 += 1; app.clamp_cursor(); } }
-            "left" => { if app.cursor.1 > 0 { app.cursor.1 -= 1; } }
-            "right" => { if app.cursor.1 + 1 < app.col_count() { app.cursor.1 += 1; } }
-            _ => {}
-        },
-        // ── 行列 ──
-        HostOp::AddRow(pos) => match pos.as_str() {
-            "before" => app.insert_row_before(),
-            "after" => app.insert_row_after(),
-            _ => {}
-        },
-        HostOp::AddCol(pos) => match pos.as_str() {
-            "before" => app.insert_col_before(),
-            "after" => app.insert_col_after(),
-            _ => {}
-        },
-        HostOp::DelRow => { app.delete_row(); }
-        HostOp::DelCol => { app.delete_col(); }
-        HostOp::SwapRow => { app.move_row_up(); }
-        HostOp::SwapCol => { app.move_col_left(); }
-        // ── 选中 ──
-        HostOp::SelectKey => {
-            if app.selected == Some(app.cursor) { app.selected = None; }
-            else { app.selected = Some(app.cursor); }
-        }
-        HostOp::SwapKey => { app.swap_with_selected(); }
-        // ── 面板/输入 ──
-        HostOp::ShowMatrix(_) => { app.show_insert_menu = true; app.insert_menu_cursor = 0; }
-        HostOp::InputValue(kind) => match kind.as_str() {
-            "key" => { app.save_file(); }
-            "popup" => { app.delete_key(); }
-            _ => {}
-        },
-        HostOp::InputName(kind) => match kind.as_str() {
-            "key" | "popup" => { app.add_key_after(); }
-            _ => {}
-        },
-        HostOp::Apply => { app.apply_edit(); app.mode = Mode::Normal; app.status_msg.clear(); }
-        // ── 编辑器原语在布局 TUI 中无对应状态, 忽略 ──
-        _ => {}
+    if let Err(e) = ctx.host.call(&run) {
+        let mut app = ctx.app.lock().unwrap();
+        app.status_msg = format!("action 错误: {e}");
+        app.status_is_error = true;
     }
 }
 
@@ -1217,6 +1170,13 @@ fn render_insert_menu(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 
 // ── Public entry point ───────────────────────────────────────────────
 
+/// TUI 运行上下文: 共享状态 + 直接执行引擎 + 注册池。
+struct TuiCtx {
+    app: Arc<Mutex<App>>,
+    host: ScriptHost,
+    registry: id::IdRegistry,
+}
+
 pub fn run() -> anyhow::Result<()> {
     let file_path = crate::lib::user_dir::default_layout_file();
     let source = if file_path.exists() {
@@ -1225,8 +1185,8 @@ pub fn run() -> anyhow::Result<()> {
         String::new()
     };
 
-    let mut app = App::new(file_path, source)?;
-    run_app(&mut app)
+    let app = App::new(file_path, source)?;
+    run_app(app)
 }
 
 /// Launch TUI with a specific .tekl file.
@@ -1238,28 +1198,198 @@ pub fn run_with_file(path: &str) -> anyhow::Result<()> {
         String::new()
     };
 
-    let mut app = App::new(file_path, source)?;
-    run_app(&mut app)
+    let app = App::new(file_path, source)?;
+    run_app(app)
 }
 
-fn run_app(app: &mut App) -> anyhow::Result<()> {
+/// 构建 TUI 引擎 — 细粒度原语捕获状态句柄，插件逻辑直接读写状态。
+fn tui_engine(handle: Arc<Mutex<App>>) -> ScriptHost {
+    let mut engine = rhai::Engine::new();
+    engine.register_type_with_name::<Arc<Mutex<App>>>("Tui");
+
+    macro_rules! prim0 {
+        ($name:literal, $f:expr) => {{
+            let h = handle.clone();
+            let g = move |h: Arc<Mutex<App>>| $f(h);
+            engine.register_fn($name, move || g(h.clone()));
+        }};
+    }
+    macro_rules! prim1s {
+        ($name:literal, $arg:ident, $f:expr) => {{
+            let h = handle.clone();
+            let g = move |h: Arc<Mutex<App>>, $arg: &str| $f(h, $arg);
+            engine.register_fn($name, move |$arg: &str| g(h.clone(), $arg));
+        }};
+    }
+
+    // ── 读原语 (让 .rhai 能写守卫与组合) ──
+    prim0!("cursor_row", |h: Arc<Mutex<App>>| h.lock().unwrap().cursor.0 as i64);
+    prim0!("cursor_col", |h: Arc<Mutex<App>>| h.lock().unwrap().cursor.1 as i64);
+    prim0!("row_count", |h: Arc<Mutex<App>>| h.lock().unwrap().row_count() as i64);
+    prim0!("col_count", |h: Arc<Mutex<App>>| h.lock().unwrap().col_count() as i64);
+    prim0!("selected_row", |h: Arc<Mutex<App>>| h
+        .lock()
+        .unwrap()
+        .selected
+        .map(|s| s.0 as i64)
+        .unwrap_or(-1));
+    prim0!("selected_col", |h: Arc<Mutex<App>>| h
+        .lock()
+        .unwrap()
+        .selected
+        .map(|s| s.1 as i64)
+        .unwrap_or(-1));
+
+    // ── 写原语 ──
+    {
+        let h = handle.clone();
+        engine.register_fn("set_cursor", move |r: i64, c: i64| {
+            let mut a = h.lock().unwrap();
+            a.cursor = (r.max(0) as usize, c.max(0) as usize);
+            a.clamp_cursor();
+        });
+    }
+    {
+        let h = handle.clone();
+        engine.register_fn("set_selected", move |r: i64, c: i64| {
+            let mut a = h.lock().unwrap();
+            a.selected = Some((r.max(0) as usize, c.max(0) as usize));
+        });
+    }
+    prim0!("clear_selection", |h: Arc<Mutex<App>>| h.lock().unwrap().selected = None);
+
+    // ── 系统与模式 ──
+    prim0!("exit", |h: Arc<Mutex<App>>| h.lock().unwrap().should_quit = true);
+    prim1s!("set_mode", n, |h: Arc<Mutex<App>>, n: &str| {
+        let mut a = h.lock().unwrap();
+        match n {
+            "0x01" => {
+                a.mode = Mode::Normal;
+                a.status_msg.clear();
+            }
+            "0x02" => a.enter_edit_mode(),
+            "0x03" => a.enter_popup_mode(),
+            _ => {}
+        }
+    });
+    // 数字形式 (兼容 set_mode(0x02))
+    {
+        let h = handle.clone();
+        engine.register_fn("set_mode", move |n: i64| {
+            let mut a = h.lock().unwrap();
+            match n {
+                0x01 => {
+                    a.mode = Mode::Normal;
+                    a.status_msg.clear();
+                }
+                0x02 => a.enter_edit_mode(),
+                0x03 => a.enter_popup_mode(),
+                _ => {}
+            }
+        });
+    }
+
+    // ── 粗粒度便捷原语 (委托既有方法) ──
+    prim1s!("focus", d, |h: Arc<Mutex<App>>, d: &str| {
+        let mut a = h.lock().unwrap();
+        match d {
+            "up" => {
+                if a.cursor.0 > 0 {
+                    a.cursor.0 -= 1;
+                    a.clamp_cursor();
+                }
+            }
+            "down" => {
+                if a.cursor.0 + 1 < a.row_count() {
+                    a.cursor.0 += 1;
+                    a.clamp_cursor();
+                }
+            }
+            "left" => {
+                if a.cursor.1 > 0 {
+                    a.cursor.1 -= 1;
+                }
+            }
+            "right" => {
+                if a.cursor.1 + 1 < a.col_count() {
+                    a.cursor.1 += 1;
+                }
+            }
+            _ => {}
+        }
+    });
+    prim1s!("add_row", p, |h: Arc<Mutex<App>>, p: &str| {
+        let mut a = h.lock().unwrap();
+        match p {
+            "before" => a.insert_row_before(),
+            _ => a.insert_row_after(),
+        }
+    });
+    prim1s!("add_col", p, |h: Arc<Mutex<App>>, p: &str| {
+        let mut a = h.lock().unwrap();
+        match p {
+            "before" => a.insert_col_before(),
+            _ => a.insert_col_after(),
+        }
+    });
+    prim0!("del_row", |h: Arc<Mutex<App>>| h.lock().unwrap().delete_row());
+    prim0!("del_col", |h: Arc<Mutex<App>>| h.lock().unwrap().delete_col());
+    prim0!("swap_row", |h: Arc<Mutex<App>>| h.lock().unwrap().move_row_up());
+    prim0!("swap_col", |h: Arc<Mutex<App>>| h.lock().unwrap().move_col_left());
+    prim0!("swap_key", |h: Arc<Mutex<App>>| h.lock().unwrap().swap_with_selected());
+    prim1s!("show_matrix", k, |h: Arc<Mutex<App>>, _k: &str| {
+        let mut a = h.lock().unwrap();
+        a.show_insert_menu = true;
+        a.insert_menu_cursor = 0;
+    });
+    prim1s!("input_value", k, |h: Arc<Mutex<App>>, k: &str| {
+        let mut a = h.lock().unwrap();
+        match k {
+            "key" => a.save_file(),
+            _ => a.delete_key(),
+        }
+    });
+    prim1s!("input_name", k, |h: Arc<Mutex<App>>, _k: &str| {
+        let mut a = h.lock().unwrap();
+        a.add_key_after()
+    });
+    prim0!("apply", |h: Arc<Mutex<App>>| {
+        let mut a = h.lock().unwrap();
+        a.apply_edit();
+        a.mode = Mode::Normal;
+        a.status_msg.clear();
+    });
+
+    ScriptHost { engine, lib: rhai::AST::empty() }
+}
+
+fn run_app(mut app: App) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let registry = app.id_registry.clone();
+    let lib = std::mem::take(&mut app.id_registry.lib);
+    let shared = Arc::new(Mutex::new(app));
+    let host = ScriptHost { engine: tui_engine(shared.clone()).engine, lib };
+    let ctx = TuiCtx { app: shared, host, registry };
+
     let tick_rate = Duration::from_millis(50);
     loop {
-        terminal.draw(|f| render_frame(f, app))?;
+        {
+            let g = ctx.app.lock().unwrap();
+            terminal.draw(|f| render_frame(f, &g))?;
+        }
 
-        if app.should_quit {
+        if ctx.app.lock().unwrap().should_quit {
             break;
         }
 
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
-                handle_event(app, key);
+                handle_event(&ctx, key);
             }
         }
     }

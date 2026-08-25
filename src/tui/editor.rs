@@ -13,7 +13,8 @@ use ratatui::backend::CrosstermBackend;
 use crate::lib::user_dir;
 use crate::lib::id;
 use crate::lib::behavior;
-use crate::worker::script_runtime;
+use crate::worker::script_runtime::{self, ScriptHost};
+use std::sync::{Arc, Mutex};
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Mode {
@@ -54,6 +55,8 @@ struct EditorState {
     pane: Pane,
     /// ID 表选中行索引
     id_sel: usize,
+    /// 退出信号 — 由 0x00 的 run 闭包置位
+    should_quit: bool,
     ttoll_table: HashMap<Option<String>, Vec<behavior::Rule>>,
     id_registry: id::IdRegistry,
     /// 热加载: 上次看到的文件修改时间
@@ -101,6 +104,7 @@ pub fn run_editor(file: &Option<String>) -> anyhow::Result<()> {
         status_is_error: false,
         pane: Pane::Content,
         id_sel: 0,
+        should_quit: false,
         show_help: false,
         ttoll_table,
         id_registry,
@@ -108,7 +112,13 @@ pub fn run_editor(file: &Option<String>) -> anyhow::Result<()> {
         ids_mtime: None,
     };
 
-    let result = event_loop(&mut terminal, &path, &mut state);
+    let registry = state.id_registry.clone();
+    let lib = std::mem::take(&mut state.id_registry.lib);
+    let shared = Arc::new(Mutex::new(state));
+    let host = ScriptHost { engine: ed_engine(shared.clone(), path.clone()).engine, lib };
+    let ctx = EdCtx { state: shared, host, registry, path: path.clone() };
+
+    let result = event_loop(&mut terminal, &ctx);
 
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(
@@ -118,6 +128,169 @@ pub fn run_editor(file: &Option<String>) -> anyhow::Result<()> {
     )?;
 
     result
+}
+
+/// 编辑器运行上下文。
+struct EdCtx {
+    state: Arc<Mutex<EditorState>>,
+    host: ScriptHost,
+    registry: id::IdRegistry,
+    path: std::path::PathBuf,
+}
+
+/// 构建编辑器引擎 — 细粒度原语捕获状态句柄，插件逻辑直接读写状态。
+fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> ScriptHost {
+    let mut engine = rhai::Engine::new();
+    engine.register_type_with_name::<Arc<Mutex<EditorState>>>("Ed");
+
+    macro_rules! prim0 {
+        ($name:literal, $f:expr) => {{
+            let h = handle.clone();
+            let g = move |h: Arc<Mutex<EditorState>>| $f(h);
+            engine.register_fn($name, move || g(h.clone()));
+        }};
+    }
+    macro_rules! prim1s {
+        ($name:literal, $arg:ident, $f:expr) => {{
+            let h = handle.clone();
+            let g = move |h: Arc<Mutex<EditorState>>, $arg: &str| $f(h, $arg);
+            engine.register_fn($name, move |$arg: &str| g(h.clone(), $arg));
+        }};
+    }
+
+    // ── 读原语 ──
+    prim0!("cursor_row", |h: Arc<Mutex<EditorState>>| h.lock().unwrap().cursor_row as i64);
+    prim0!("cursor_col", |h: Arc<Mutex<EditorState>>| h.lock().unwrap().cursor_col as i64);
+    prim0!("row_count", |h: Arc<Mutex<EditorState>>| h.lock().unwrap().lines.len() as i64);
+    prim0!("line_len", |h: Arc<Mutex<EditorState>>| {
+        let s = h.lock().unwrap();
+        s.lines[s.cursor_row].len() as i64
+    });
+
+    // ── 光标/编辑原语 ──
+    {
+        let h = handle.clone();
+        engine.register_fn("set_cursor", move |r: i64, c: i64| {
+            let mut s = h.lock().unwrap();
+            let n = s.lines.len();
+            if r >= 0 && (r as usize) < n {
+                s.cursor_row = r as usize;
+                let len = s.lines[s.cursor_row].len();
+                s.cursor_col = (c.max(0) as usize).min(len);
+            }
+        });
+    }
+    prim1s!("insert_text", t, |h: Arc<Mutex<EditorState>>, t: &str| {
+        insert_text(&mut h.lock().unwrap(), t);
+    });
+    prim0!("backspace", |h: Arc<Mutex<EditorState>>| backspace(&mut h.lock().unwrap()));
+    prim0!("delete_char", |h: Arc<Mutex<EditorState>>| {
+        let mut s = h.lock().unwrap();
+        let (r, c) = { let g = h.lock().unwrap(); (g.cursor_row, g.cursor_col) };
+        let mut s = h.lock().unwrap();
+        if !s.lines[r].is_empty() && c < s.lines[r].len() {
+            s.lines[r].remove(c);
+            clamp_col(&mut s);
+            s.modified = true;
+        }
+    });
+    prim0!("delete_line", |h: Arc<Mutex<EditorState>>| {
+        let mut s = h.lock().unwrap();
+        if s.lines.len() > 1 {
+            let r = s.cursor_row;
+            s.lines.remove(r);
+            clamp_row(&mut s);
+            clamp_col(&mut s);
+            s.modified = true;
+        }
+    });
+    // 仅插入空行; 进入插入模式的决策属于插件逻辑 (见 <ID>.rhai)
+    prim1s!("new_line", pos, |h: Arc<Mutex<EditorState>>, pos: &str| {
+        let mut s = h.lock().unwrap();
+        if pos == "below" {
+            let at = s.cursor_row + 1;
+            s.lines.insert(at, String::new());
+            s.cursor_row = at;
+            s.cursor_col = 0;
+        } else {
+            let at = s.cursor_row;
+            s.lines.insert(at, String::new());
+            s.cursor_col = 0;
+        }
+        s.modified = true;
+    });
+
+    // ── 模式/面板/命令/文件 ──
+    {
+        let h = handle.clone();
+        engine.register_fn("set_mode", move |n: i64| {
+            let mut s = h.lock().unwrap();
+            match n {
+                0x01 => {
+                    s.mode = Mode::Normal;
+                    s.status_msg.clear();
+                }
+                0x02 => s.mode = Mode::Insert,
+                0x03 => {
+                    s.mode = Mode::Command;
+                    s.cmd_buf.clear();
+                }
+                _ => {}
+            }
+        });
+    }
+    prim1s!("toggle_panel", k, |h: Arc<Mutex<EditorState>>, k: &str| {
+        let mut s = h.lock().unwrap();
+        if k == "help" {
+            s.show_help = !s.show_help;
+        }
+    });
+    {
+        let h = handle.clone();
+        let p = path.clone();
+        engine.register_fn("exec_cmd", move || {
+            let mut s = h.lock().unwrap();
+            if s.mode == Mode::Command {
+                execute_command(&mut s, &p);
+            }
+        });
+    }
+    prim0!("cancel_cmd", |h: Arc<Mutex<EditorState>>| {
+        let mut s = h.lock().unwrap();
+        s.mode = Mode::Normal;
+        s.cmd_buf.clear();
+    });
+    {
+        let h = handle.clone();
+        let p = path.clone();
+        engine.register_fn("save", move |validate: bool| {
+            let mut s = h.lock().unwrap();
+            let content = s.lines.join("\n");
+            if validate {
+                if let Some(e) = validate_ttoll(&content) {
+                    s.status_msg = format!("语法错误: {}", e);
+                    s.status_is_error = true;
+                    return;
+                }
+            }
+            let _ = fs::write(&p, &content);
+            s.modified = false;
+            s.status_msg = format!("已保存: {}", p.display());
+            s.status_is_error = false;
+        });
+    }
+    // ── 系统 ──
+    prim0!("exit", |h: Arc<Mutex<EditorState>>| {
+        let mut s = h.lock().unwrap();
+        if s.modified {
+            s.status_msg = "已修改，用 :q! 强制退出".into();
+            s.status_is_error = true;
+        } else {
+            s.should_quit = true;
+        }
+    });
+
+    ScriptHost { engine, lib: rhai::AST::empty() }
 }
 
 fn resolve_path(file: &Option<String>) -> std::path::PathBuf {
@@ -131,11 +304,13 @@ fn resolve_path(file: &Option<String>) -> std::path::PathBuf {
 
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    path: &std::path::Path,
-    state: &mut EditorState,
+    ctx: &EdCtx,
 ) -> anyhow::Result<()> {
     loop {
-        draw(terminal, path, state)?;
+        {
+            let g = ctx.state.lock().unwrap();
+            draw(terminal, &ctx.path, &g)?;
+        }
 
         if let Event::Key(key) = event::read()? {
             // Ctrl+C always quits
@@ -143,80 +318,124 @@ fn event_loop(
                 return Ok(());
             }
 
-            // ── 分区导航 (输入层, 不经过 ttoll): ALT+LEFT/RIGHT ──
-            if key.modifiers.contains(KeyModifiers::ALT) {
-                match key.code {
-                    KeyCode::Left => { state.pane = Pane::Ids; continue; }
-                    KeyCode::Right => { state.pane = Pane::Content; continue; }
-                    _ => {}
-                }
-            }
+            // ── 阶段一: 短暂持锁完成路由与输入层处理, 产出待分派键名 ──
+            enum Next { Handled, Dispatch(String) }
+            let next = {
+                let mut s = ctx.state.lock().unwrap();
 
-            // ── ID 表焦点: 只读浏览, 仅 ↑↓ 滚动 ──
-            if state.pane == Pane::Ids {
-                let count = state.id_registry.all_entries().len();
-                match key.code {
-                    KeyCode::Up => { state.id_sel = state.id_sel.saturating_sub(1); }
-                    KeyCode::Down => {
-                        if state.id_sel + 1 < count { state.id_sel += 1; }
+                // 分区导航 (输入层, 不经过 ttoll): ALT+LEFT/RIGHT
+                if key.modifiers.contains(KeyModifiers::ALT) {
+                    match key.code {
+                        KeyCode::Left => { s.pane = Pane::Ids; Next::Handled }
+                        KeyCode::Right => { s.pane = Pane::Content; Next::Handled }
+                        _ => Next::Dispatch(String::new()), // 落入下方常规路由
                     }
-                    _ => {}
+                } else if s.pane == Pane::Ids {
+                    // ID 表焦点: 只读浏览, 仅 ↑↓ 滚动
+                    let count = s.id_registry.all_entries().len();
+                    match key.code {
+                        KeyCode::Up => { s.id_sel = s.id_sel.saturating_sub(1); }
+                        KeyCode::Down => {
+                            if s.id_sel + 1 < count { s.id_sel += 1; }
+                        }
+                        _ => {}
+                    }
+                    Next::Handled
+                } else {
+                    match s.mode {
+                        Mode::Insert => match key.code {
+                            KeyCode::Char(c) => {
+                                let row = s.cursor_row;
+                                let col = s.cursor_col;
+                                s.lines[row].insert(col, c);
+                                s.cursor_col += 1;
+                                s.modified = true;
+                                Next::Handled
+                            }
+                            KeyCode::Backspace => {
+                                backspace(&mut s);
+                                Next::Handled
+                            }
+                            KeyCode::Tab => {
+                                insert_text(&mut s, "    ");
+                                Next::Handled
+                            }
+                            _ => match crossterm_to_key_name(key) {
+                                Some(n) => Next::Dispatch(n),
+                                None => Next::Handled,
+                            },
+                        },
+                        Mode::Command => match key.code {
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                s.cmd_buf.push(c);
+                                Next::Handled
+                            }
+                            KeyCode::Backspace => {
+                                s.cmd_buf.pop();
+                                Next::Handled
+                            }
+                            _ => match crossterm_to_key_name(key) {
+                                Some(n) => Next::Dispatch(n),
+                                None => Next::Handled,
+                            },
+                        },
+                        Mode::Normal => match crossterm_to_key_name(key) {
+                            // 文法冻结: 只有 K ∪ D (及 CTRL+/ALT+ 和弦) 参与 ttoll 分派
+                            Some(n) if behavior::is_known_key(&n) => Next::Dispatch(n),
+                            _ => Next::Handled,
+                        },
+                    }
                 }
-                continue;
-            }
-
-            // ── 内容焦点: 输入类按键不经过 ttoll；Normal 仅接受文法词汇 ──
-            let should_quit = match state.mode {
-                Mode::Insert => match key.code {
-                    KeyCode::Char(c) => {
-                        let row = state.cursor_row;
-                        let col = state.cursor_col;
-                        state.lines[row].insert(col, c);
-                        state.cursor_col += 1;
-                        state.modified = true;
-                        false
-                    }
-                    KeyCode::Backspace => {
-                        backspace(state);
-                        false
-                    }
-                    KeyCode::Tab => {
-                        insert_text(state, "    ");
-                        false
-                    }
-                    _ => dispatch_named(state, path, crossterm_to_key_name(key)),
-                },
-                Mode::Command => match key.code {
-                    KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        dispatch_named(state, path, crossterm_to_key_name(key))
-                    }
-                    KeyCode::Char(c) => {
-                        state.cmd_buf.push(c);
-                        false
-                    }
-                    KeyCode::Backspace => {
-                        state.cmd_buf.pop();
-                        false
-                    }
-                    _ => dispatch_named(state, path, crossterm_to_key_name(key)),
-                },
-                Mode::Normal => match crossterm_to_key_name(key) {
-                    // 文法冻结: 只有 K ∪ D (及 CTRL+/ALT+ 和弦) 参与 ttoll 分派
-                    Some(n) if behavior::is_known_key(&n) => dispatch_named(state, path, Some(n)),
-                    _ => false,
-                },
             };
-            if should_quit {
-                return Ok(());
+
+            // ── 阶段二: 无锁状态下直接执行 Rhai 动作 (引擎内部自行加锁) ──
+            if let Next::Dispatch(name) = next {
+                dispatch_execute(ctx, &name);
             }
 
-            // Auto-scroll
-            if state.cursor_row >= state.scroll_y + 10 {
-                state.scroll_y = state.cursor_row.saturating_sub(9);
+            // Auto-scroll + 退出检查 (短暂持锁)
+            {
+                let mut s = ctx.state.lock().unwrap();
+                if s.cursor_row >= s.scroll_y + 10 {
+                    s.scroll_y = s.cursor_row.saturating_sub(9);
+                }
+                if s.cursor_row < s.scroll_y {
+                    s.scroll_y = s.cursor_row;
+                }
+                if s.should_quit {
+                    return Ok(());
+                }
             }
-            if state.cursor_row < state.scroll_y {
-                state.scroll_y = state.cursor_row;
-            }
+        }
+    }
+}
+
+/// 按 ttoll 规则分派并直接执行 Rhai 动作。
+fn dispatch_execute(ctx: &EdCtx, name: &str) {
+    let action_id = {
+        let s = ctx.state.lock().unwrap();
+        let current_mode = s.mode.as_hex().to_string();
+        if name.contains('+') {
+            let keys: Vec<String> = name.split('+').map(str::to_string).collect();
+            behavior::dispatch_chord(&s.ttoll_table, &current_mode, &keys)
+        } else {
+            behavior::dispatch(&s.ttoll_table, &current_mode, name)
+        }
+    };
+    let Some(action_id) = action_id else { return };
+
+    if !ctx.registry.is_registered(&action_id) {
+        let mut s = ctx.state.lock().unwrap();
+        s.status_msg = format!("未知 ID: {}", action_id);
+        s.status_is_error = true;
+        return;
+    }
+
+    if let Some(run) = ctx.registry.action_fn(&action_id).cloned() {
+        if let Err(e) = ctx.host.call(&run) {
+            let mut s = ctx.state.lock().unwrap();
+            s.status_msg = format!("action 错误: {e}");
+            s.status_is_error = true;
         }
     }
 }
@@ -247,30 +466,6 @@ fn insert_text(state: &mut EditorState, text: &str) {
     state.modified = true;
 }
 
-/// 按 ttoll 规则分派一个键名；返回是否应退出编辑器。
-fn dispatch_named(
-    state: &mut EditorState,
-    path: &std::path::Path,
-    key_name: Option<String>,
-) -> bool {
-    let Some(name) = key_name else {
-        return false;
-    };
-    let current_mode = state.mode.as_hex().to_string();
-    // 和弦名 (CTRL+X) 走 dispatch_chord, 普通键走 dispatch
-    let action_id = if name.contains('+') {
-        let keys: Vec<String> = name.split('+').map(str::to_string).collect();
-        behavior::dispatch_chord(&state.ttoll_table, &current_mode, &keys)
-    } else {
-        behavior::dispatch(&state.ttoll_table, &current_mode, &name)
-    };
-    if let Some(action_id) = action_id {
-        execute_action(state, &action_id, path);
-        return action_id == "0x00" && !state.modified;
-    }
-    false
-}
-
 /// Convert crossterm KeyEvent to DSL key name.
 fn crossterm_to_key_name(key: KeyEvent) -> Option<String> {
     // CTRL+方向 → 和弦名 (文法 CHORD 形式)
@@ -293,175 +488,6 @@ fn crossterm_to_key_name(key: KeyEvent) -> Option<String> {
             }
         }
         _ => None,
-    }
-}
-
-// ── Action execution — 无硬编码：ID → action 由注册池提供（Rhai），此处仅回放宿主操作 ──
-
-fn execute_action(state: &mut EditorState, action_id: &str, path: &std::path::Path) {
-    if !state.id_registry.is_registered(action_id) {
-        state.status_msg = format!("未知 ID: {}", action_id);
-        state.status_is_error = true;
-        return;
-    }
-
-    let ops = match state.id_registry.eval_action(action_id) {
-        Ok(ops) => ops,
-        Err(e) => {
-            state.status_msg = format!("action 错误: {e}");
-            state.status_is_error = true;
-            return;
-        }
-    };
-
-    for op in &ops {
-        apply_host_op(state, op, path);
-    }
-}
-
-/// 宿主操作回放 — HostOp → EditorState 状态变更。
-fn apply_host_op(state: &mut EditorState, op: &script_runtime::HostOp, path: &std::path::Path) {
-    use script_runtime::HostOp;
-    match op {
-        // ── 系统/模式 ──
-        HostOp::Exit => {
-            if state.modified {
-                state.status_msg = "已修改，用 :q! 强制退出".into();
-                state.status_is_error = true;
-            }
-        }
-        HostOp::SetMode(n) => match *n {
-            // 模式: 0x01=Normal 0x02=Insert 0x03=Command
-            0x01 => { state.mode = Mode::Normal; state.status_msg.clear(); }
-            0x02 => { state.mode = Mode::Insert; state.status_msg.clear(); }
-            0x03 => { state.mode = Mode::Command; state.cmd_buf.clear(); state.status_msg.clear(); }
-            _ => {}
-        },
-        // ── 光标 ──
-        HostOp::Cursor(dir) => match dir.as_str() {
-            "left" => { if state.cursor_col > 0 { state.cursor_col -= 1; } }
-            "right" => {
-                if state.cursor_col < state.lines[state.cursor_row].len() {
-                    state.cursor_col += 1;
-                }
-            }
-            "down" => {
-                if state.cursor_row + 1 < state.lines.len() {
-                    state.cursor_row += 1;
-                    clamp_col(state);
-                }
-            }
-            "up" => {
-                if state.cursor_row > 0 {
-                    state.cursor_row -= 1;
-                    clamp_col(state);
-                }
-            }
-            _ => {}
-        },
-        // ── 跳转 ──
-        HostOp::Jump(target) => match target.as_str() {
-            "top" => { state.cursor_row = 0; state.cursor_col = 0; }
-            "bottom" => {
-                state.cursor_row = state.lines.len().saturating_sub(1);
-                state.cursor_col = 0;
-                clamp_col(state);
-            }
-            _ => {}
-        },
-        // ── 编辑 ──
-        HostOp::DeleteChar => {
-            if !state.lines[state.cursor_row].is_empty() {
-                state.lines[state.cursor_row].remove(state.cursor_col);
-                clamp_col(state);
-                state.modified = true;
-            }
-        }
-        HostOp::NewLine(pos) => match pos.as_str() {
-            "below" => {
-                let insert_at = state.cursor_row + 1;
-                state.lines.insert(insert_at, String::new());
-                state.cursor_row = insert_at;
-                state.cursor_col = 0;
-                state.mode = Mode::Insert;
-                state.modified = true;
-            }
-            "above" => {
-                state.lines.insert(state.cursor_row, String::new());
-                state.mode = Mode::Insert;
-                state.modified = true;
-            }
-            _ => {}
-        },
-        HostOp::DeleteLine => {
-            state.lines.remove(state.cursor_row);
-            if state.lines.is_empty() {
-                state.lines.push(String::new());
-            }
-            clamp_row(state);
-            clamp_col(state);
-            state.modified = true;
-        }
-        HostOp::InsertText(text) => {
-            if text == "\n" {
-                let rest = state.lines[state.cursor_row][state.cursor_col..].to_string();
-                state.lines[state.cursor_row].truncate(state.cursor_col);
-                state.lines.insert(state.cursor_row + 1, rest);
-                state.cursor_row += 1;
-                state.cursor_col = 0;
-            } else {
-                state.lines[state.cursor_row].insert_str(state.cursor_col, text);
-                state.cursor_col += text.chars().count();
-            }
-            state.modified = true;
-        }
-        HostOp::Backspace => {
-            if state.cursor_col > 0 {
-                state.lines[state.cursor_row].remove(state.cursor_col - 1);
-                state.cursor_col -= 1;
-                state.modified = true;
-            } else if state.cursor_row > 0 {
-                let prev_len = state.lines[state.cursor_row - 1].len();
-                let cur = std::mem::take(&mut state.lines[state.cursor_row]);
-                state.lines[state.cursor_row - 1].push_str(&cur);
-                state.lines.remove(state.cursor_row);
-                state.cursor_row -= 1;
-                state.cursor_col = prev_len;
-                state.modified = true;
-            }
-        }
-        // ── 面板 ──
-        HostOp::TogglePanel(kind) => match kind.as_str() {
-            "id" => { /* ID 表常驻左栏, 此操作为兼容占位 */ }
-            "help" => { state.show_help = !state.show_help; }
-            _ => {}
-        },
-        // ── 命令/保存 ──
-        HostOp::ExecCmd => {
-            if state.mode == Mode::Command {
-                execute_command(state, path);
-            }
-        }
-        HostOp::Save(validate) => {
-            let content = state.lines.join("\n");
-            if *validate {
-                if let Some(e) = validate_ttoll(&content) {
-                    state.status_msg = format!("语法错误: {}", e);
-                    state.status_is_error = true;
-                    return;
-                }
-            }
-            let _ = fs::write(path, &content);
-            state.modified = false;
-            state.status_msg = format!("已保存: {}", path.display());
-            state.status_is_error = false;
-        }
-        HostOp::CancelCmd => {
-            state.mode = Mode::Normal;
-            state.cmd_buf.clear();
-        }
-        // ── 矩阵原语在 ttoll 编辑器中无对应状态, 忽略 ──
-        _ => {}
     }
 }
 
