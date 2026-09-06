@@ -39,14 +39,17 @@ pub fn all_keys() -> HashSet<&'static str> {
     FUNC_KEYS.iter().chain(DIR_KEYS.iter()).copied().collect()
 }
 
-/// 该键名是否属于文法词汇 (K ∪ D，或 CTRL+/ALT+ 和弦形式)。
-/// 编辑器事件路由用：非文法键在 Normal 模式下静默忽略。
+/// 该键名是否属于文法词汇。
+/// 仅 K ∪ D 共 9 个键名合法；`CTRL+x`/`ALT+x` 和弦中 x 也必须是文法键
+/// （`CTRL+SPACE`、`ALT+LEFT` 合法；`CTRL+C` 不合法 — C 不在 K∪D）。
 pub fn is_known_key(name: &str) -> bool {
     if all_keys().contains(name) {
         return true;
     }
-    (name.starts_with("CTRL+") || name.starts_with("ALT+"))
-        && name.chars().nth(5).is_some()
+    if let Some(rest) = name.strip_prefix("CTRL+").or_else(|| name.strip_prefix("ALT+")) {
+        return all_keys().contains(rest);
+    }
+    false
 }
 
 fn is_mode(s: &str) -> bool {
@@ -255,12 +258,18 @@ fn parse_key_set(inner: &str) -> HashSet<String> {
 
 /// Expand a single key name through non-terminals (K → FUNC_KEYS, D → DIR_KEYS).
 ///
-/// Also handles chord keys like "CTRL+C" → set containing both "CTRL" and "C".
+/// Also handles chord keys like "CTRL+SPACE" → set containing both "CTRL" and "SPACE".
+/// 和弦的每一 part 都必须是文法键 (K ∪ D)；`CTRL+C` 这类含非文法键的和弦直接拒绝。
 fn expand_key(name: &str) -> Vec<String> {
-    // Handle chord keys: "CTRL+C" → ["CTRL", "C"]
+    // Handle chord keys: "CTRL+SPACE" → ["CTRL", "SPACE"]
     if name.contains('+') {
         let parts: Vec<String> = name.split('+').map(|s| s.trim().to_uppercase()).collect();
         if parts.len() > 1 && parts.iter().all(|p| !p.is_empty()) {
+            for p in &parts {
+                if !all_keys().contains(p.as_str()) {
+                    panic!("unknown chord key '{p}': must be a grammar key (K ∪ D)");
+                }
+            }
             return parts;
         }
     }
@@ -549,9 +558,8 @@ mod tests {
 
     #[test]
     fn editor_rules_conform_to_grammar() {
-        // editor.ttoll 全部规则形态 — 仅使用文法词汇 (K ∪ D)
+        // editor.ttoll 全部规则形态 — 仅使用文法词汇 (K ∪ D) 与文法键和弦
         let src = "\
-CTRL+C>0x00\n\
 0x01,LEFT>0x01\n\
 0x01,RIGHT>0x02\n\
 0x01,DOWN>0x03\n\
@@ -568,6 +576,35 @@ CTRL+C>0x00\n\
 0x03,ENTER>0x13\n";
         for line in src.lines() {
             assert!(tokenize_rule(line).is_some(), "规则不符合文法: {line}");
+        }
+    }
+
+    #[test]
+    fn grammar_chord_is_grammar_keys_only() {
+        // 和弦只能是文法键组合: CTRL+SPACE / ALT+LEFT 合法
+        assert!(tokenize_rule("CTRL+SPACE>0x00").is_some());
+        assert!(tokenize_rule("ALT+LEFT>0x00").is_some());
+        assert!(is_known_key("CTRL+SPACE"));
+        assert!(is_known_key("ALT+LEFT"));
+
+        // 非文法键和弦必须被拒绝: C/S/E/H/G 不属于 K ∪ D
+        assert!(!is_known_key("CTRL+C"));
+        assert!(!is_known_key("CTRL+S"));
+        assert!(!is_known_key("ALT+H"));
+        assert!(std::panic::catch_unwind(|| tokenize_rule("CTRL+C>0x00")).is_err());
+        assert!(std::panic::catch_unwind(|| tokenize_rule("CTRL+S>0x15")).is_err());
+    }
+
+    #[test]
+    fn repo_editor_ttoll_conforms() {
+        // 仓库根 editor.ttoll — 提供用户目录模板; 每一行必须能被 tokenize（注释返回 None 也是合法）
+        let src = include_str!("../../editor.ttoll");
+        for line in src.lines() {
+            let s = line.trim();
+            if s.is_empty() || s.starts_with("(*") {
+                continue;
+            }
+            assert!(tokenize_rule(s).is_some(), "editor.ttoll 不符合文法: {line}");
         }
     }
 

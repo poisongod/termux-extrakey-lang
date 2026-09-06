@@ -2,10 +2,7 @@
 (* K = ESC | ALT | CTRL | SPACE | ENTER *)
 (* D = UP | DOWN | LEFT | RIGHT *)
 (* M = 0x01 | 0x02 | 0x03 *)
-
-(* ── 全局规则 (任何模式生效) ── *)
-CTRL+C>0x00
-CTRL+S>0x41
+(* Ctrl+C 退出 / Ctrl+S 保存 由输入层硬编码, 不经 ttoll *)
 
 (* ── Mode 0x01: 键盘浏览 ── *)
 0x01,ESC>0x00
@@ -15,6 +12,7 @@ CTRL+S>0x41
 0x01,RIGHT>0x13
 0x01,ENTER>0x02
 0x01,SPACE>0x30
+0x01,CTRL+SPACE>0x40
 
 (* ── Mode 0x02: 主键编辑 ── *)
 0x02,ESC>0x01

@@ -13,7 +13,7 @@ use ratatui::backend::CrosstermBackend;
 use crate::lib::user_dir;
 use crate::lib::id;
 use crate::lib::behavior;
-use crate::worker::script_runtime::{self, ScriptHost};
+use crate::worker::script_runtime::ScriptHost;
 use std::sync::{Arc, Mutex};
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -62,6 +62,9 @@ struct EditorState {
     /// 热加载: 上次看到的文件修改时间
     ttoll_mtime: Option<std::time::SystemTime>,
     ids_mtime: Option<std::time::SystemTime>,
+    /// 撤销/重做历史 (行快照)
+    undo_stack: Vec<Vec<String>>,
+    redo_stack: Vec<Vec<String>>,
 }
 
 pub fn run_editor(file: &Option<String>) -> anyhow::Result<()> {
@@ -110,6 +113,8 @@ pub fn run_editor(file: &Option<String>) -> anyhow::Result<()> {
         id_registry,
         ttoll_mtime: None,
         ids_mtime: None,
+        undo_stack: Vec::new(),
+        redo_stack: Vec::new(),
     };
 
     let registry = state.id_registry.clone();
@@ -166,6 +171,15 @@ fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> Scrip
         let s = h.lock().unwrap();
         s.lines[s.cursor_row].len() as i64
     });
+    prim1s!("line_text", row, |h: Arc<Mutex<EditorState>>, row: &str| {
+        let s = h.lock().unwrap();
+        if let Ok(r) = row.parse::<usize>() {
+            if let Some(l) = s.lines.get(r) {
+                return l.clone();
+            }
+        }
+        String::new()
+    });
 
     // ── 光标/编辑原语 ──
     {
@@ -186,9 +200,10 @@ fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> Scrip
     prim0!("backspace", |h: Arc<Mutex<EditorState>>| backspace(&mut h.lock().unwrap()));
     prim0!("delete_char", |h: Arc<Mutex<EditorState>>| {
         let mut s = h.lock().unwrap();
-        let (r, c) = { let g = h.lock().unwrap(); (g.cursor_row, g.cursor_col) };
-        let mut s = h.lock().unwrap();
+        let r = s.cursor_row;
+        let c = s.cursor_col;
         if !s.lines[r].is_empty() && c < s.lines[r].len() {
+            lines_snapshot(&mut s);
             s.lines[r].remove(c);
             clamp_col(&mut s);
             s.modified = true;
@@ -197,6 +212,7 @@ fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> Scrip
     prim0!("delete_line", |h: Arc<Mutex<EditorState>>| {
         let mut s = h.lock().unwrap();
         if s.lines.len() > 1 {
+            lines_snapshot(&mut s);
             let r = s.cursor_row;
             s.lines.remove(r);
             clamp_row(&mut s);
@@ -207,6 +223,7 @@ fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> Scrip
     // 仅插入空行; 进入插入模式的决策属于插件逻辑 (见 <ID>.rhai)
     prim1s!("new_line", pos, |h: Arc<Mutex<EditorState>>, pos: &str| {
         let mut s = h.lock().unwrap();
+        lines_snapshot(&mut s);
         if pos == "below" {
             let at = s.cursor_row + 1;
             s.lines.insert(at, String::new());
@@ -217,6 +234,19 @@ fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> Scrip
             s.lines.insert(at, String::new());
             s.cursor_col = 0;
         }
+        s.modified = true;
+    });
+
+    // 在光标处拆分当前行为两行 (0x0B 换行)
+    prim0!("split_line", |h: Arc<Mutex<EditorState>>| {
+        let mut s = h.lock().unwrap();
+        lines_snapshot(&mut s);
+        let r = s.cursor_row;
+        let c = s.cursor_col;
+        let rest = s.lines[r].split_off(c);
+        s.lines.insert(r + 1, rest);
+        s.cursor_row = r + 1;
+        s.cursor_col = 0;
         s.modified = true;
     });
 
@@ -241,8 +271,10 @@ fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> Scrip
     }
     prim1s!("toggle_panel", k, |h: Arc<Mutex<EditorState>>, k: &str| {
         let mut s = h.lock().unwrap();
-        if k == "help" {
-            s.show_help = !s.show_help;
+        match k {
+            "help" => s.show_help = !s.show_help,
+            "id" => s.pane = if s.pane == Pane::Ids { Pane::Content } else { Pane::Ids },
+            _ => {}
         }
     });
     {
@@ -279,7 +311,9 @@ fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> Scrip
             s.status_is_error = false;
         });
     }
-    // ── 系统 ──
+    // 系统管理
+    prim0!("undo", |h: Arc<Mutex<EditorState>>| undo_edit(&mut h.lock().unwrap()));
+    prim0!("redo", |h: Arc<Mutex<EditorState>>| redo_edit(&mut h.lock().unwrap()));
     prim0!("exit", |h: Arc<Mutex<EditorState>>| {
         let mut s = h.lock().unwrap();
         if s.modified {
@@ -331,12 +365,31 @@ fn event_loop(
                         _ => Next::Dispatch(String::new()), // 落入下方常规路由
                     }
                 } else if s.pane == Pane::Ids {
-                    // ID 表焦点: 只读浏览, 仅 ↑↓ 滚动
+                    // ID 表: ↑↓ 滚动, Enter 跳到当前 ID 对应的接线行
                     let count = s.id_registry.all_entries().len();
                     match key.code {
                         KeyCode::Up => { s.id_sel = s.id_sel.saturating_sub(1); }
                         KeyCode::Down => {
                             if s.id_sel + 1 < count { s.id_sel += 1; }
+                        }
+                        KeyCode::Enter => {
+                            let sel: String = s.id_registry
+                                .all_entries()
+                                .get(s.id_sel)
+                                .map(|e| e.id.clone())
+                                .unwrap_or_default();
+                            if !sel.is_empty() {
+                                if let Some(at) = s.lines.iter().position(|l| {
+                                    extract_action_id(l).as_deref() == Some(sel.as_str())
+                                }) {
+                                    s.cursor_row = at;
+                                    s.cursor_col = s.lines[at].len();
+                                } else {
+                                    s.status_msg = format!("{} 尚未接线, 用 :map 生成", sel);
+                                    s.status_is_error = false;
+                                }
+                            }
+                            s.pane = Pane::Content;
                         }
                         _ => {}
                     }
@@ -345,6 +398,7 @@ fn event_loop(
                     match s.mode {
                         Mode::Insert => match key.code {
                             KeyCode::Char(c) => {
+                                lines_snapshot(&mut s);
                                 let row = s.cursor_row;
                                 let col = s.cursor_col;
                                 s.lines[row].insert(col, c);
@@ -440,8 +494,51 @@ fn dispatch_execute(ctx: &EdCtx, name: &str) {
     }
 }
 
+/// 修改前行快照 (撤销用); 上限 100, 并清空 redo。
+fn lines_snapshot(state: &mut EditorState) {
+    state.undo_stack.push(state.lines.clone());
+    if state.undo_stack.len() > 100 {
+        state.undo_stack.remove(0);
+    }
+    state.redo_stack.clear();
+}
+
+fn undo_edit(state: &mut EditorState) {
+    if let Some(prev) = state.undo_stack.pop() {
+        state.redo_stack.push(state.lines.clone());
+        state.lines = prev;
+        clamp_row(state);
+        clamp_col(state);
+        state.modified = true;
+        state.status_msg = "已撤销".into();
+        state.status_is_error = false;
+    } else {
+        state.status_msg = "无可撤销".into();
+        state.status_is_error = true;
+    }
+}
+
+fn redo_edit(state: &mut EditorState) {
+    if let Some(next) = state.redo_stack.pop() {
+        state.undo_stack.push(state.lines.clone());
+        state.lines = next;
+        clamp_row(state);
+        clamp_col(state);
+        state.modified = true;
+        state.status_msg = "已重做".into();
+        state.status_is_error = false;
+    } else {
+        state.status_msg = "无可重做".into();
+        state.status_is_error = true;
+    }
+}
+
 /// Insert 模式退格 — 输入层行为，不经过 ttoll。
 fn backspace(state: &mut EditorState) {
+    if state.cursor_col == 0 && state.cursor_row == 0 {
+        return;
+    }
+    lines_snapshot(state);
     if state.cursor_col > 0 {
         state.lines[state.cursor_row].remove(state.cursor_col - 1);
         state.cursor_col -= 1;
@@ -459,6 +556,10 @@ fn backspace(state: &mut EditorState) {
 
 /// Insert 模式插入文本 — 输入层行为，不经过 ttoll。
 fn insert_text(state: &mut EditorState, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    lines_snapshot(state);
     let row = state.cursor_row;
     let col = state.cursor_col;
     state.lines[row].insert_str(col, text);
@@ -480,9 +581,14 @@ fn crossterm_to_key_name(key: KeyEvent) -> Option<String> {
         KeyCode::Left => Some(if ctrl { "CTRL+LEFT".into() } else { "LEFT".into() }),
         KeyCode::Right => Some(if ctrl { "CTRL+RIGHT".into() } else { "RIGHT".into() }),
         KeyCode::Char(c) => {
-            // 大小写敏感 (vim 风格: i 与 I 是不同的键); CTRL 和弦统一大写修饰部分
+            // 大小写敏感 (vim 风格: i 与 I 是不同的键); CTRL 和弦只对文法键生成
             if key.modifiers.contains(KeyModifiers::CONTROL) {
-                Some(format!("CTRL+{}", c.to_ascii_uppercase()))
+                let up = c.to_ascii_uppercase().to_string();
+                if behavior::is_known_key(&up) {
+                    Some(format!("CTRL+{up}"))
+                } else {
+                    None
+                }
             } else {
                 Some(c.to_string())
             }
@@ -492,11 +598,19 @@ fn crossterm_to_key_name(key: KeyEvent) -> Option<String> {
 }
 
 /// Execute the command buffer.
+/// 命令名 == 目标动作; 生成规则用 :map / :tmpl 只需字母+数字, 不必打符号。
 fn execute_command(state: &mut EditorState, path: &std::path::Path) {
     let cmd = state.cmd_buf.trim().to_string();
     state.cmd_buf.clear();
-    match cmd.as_str() {
-        "w" => {
+
+    let mut parts = cmd.split_whitespace();
+    let base = parts.next().unwrap_or("").to_string();
+
+    let stay_insert = base == "tmpl" || base == "map";
+
+    match base.as_str() {
+        // ── 文件操作 ──
+        "w" | "s" => {
             let content = state.lines.join("\n");
             let err = validate_ttoll(&content);
             if let Some(e) = err {
@@ -509,14 +623,14 @@ fn execute_command(state: &mut EditorState, path: &std::path::Path) {
                 state.status_is_error = false;
             }
         }
-        "w!" => {
+        "w!" | "s!" => {
             let content = state.lines.join("\n");
             let _ = fs::write(path, &content);
             state.modified = false;
             state.status_msg = format!("已保存: {}", path.display());
             state.status_is_error = false;
         }
-        "wq" => {
+        "wq" | "x" => {
             let content = state.lines.join("\n");
             let err = validate_ttoll(&content);
             if let Some(e) = err {
@@ -541,18 +655,62 @@ fn execute_command(state: &mut EditorState, path: &std::path::Path) {
             let ids: Vec<String> = entries.iter()
                 .map(|e| format!("{} {}", e.id, e.desc))
                 .collect();
-            state.status_msg = ids.join(" │ ");
+            state.status_msg = ids.join(" | ");
             state.status_is_error = false;
         }
-        "help" => { state.show_help = !state.show_help; }
+        "help" | "h" => { state.show_help = !state.show_help; }
         "set ids" => { state.pane = Pane::Ids; }
         "hide ids" => { state.pane = Pane::Content; }
+
+        // ── 行编辑 ──
+        "del" => {
+            if state.lines.len() > 1 {
+                lines_snapshot(state);
+                state.lines.remove(state.cursor_row);
+                clamp_row(state);
+                clamp_col(state);
+                state.modified = true;
+                state.status_msg = "已删除当前行".into();
+                state.status_is_error = false;
+            } else {
+                state.status_msg = "不能删除最后一行".into();
+                state.status_is_error = true;
+            }
+        }
+
+        // ── 生成合法规则行 (免打 , > 0x 等符号) ──
+        // tmpl → 0x01,UP>0x10
+        // map <MODE hex> <KEY|Chord> [ID hex] → 0x<MODE>,<KEY>>0x<ID>
+        "tmpl" | "map" => {
+            let mode_hex = normalize_hex(parts.next().unwrap_or("01"));
+            let key = parts.next().unwrap_or("UP").to_uppercase();
+            let id_hex = normalize_hex(parts.next().unwrap_or("10"));
+            let line = format!("0x{},{}>0x{}", mode_hex, key, id_hex);
+            lines_snapshot(state);
+            let at = state.cursor_row + 1;
+            state.lines.insert(at, line.clone());
+            state.cursor_row = at;
+            // 光标停在 ID 起始处, 进入 Insert 直接改写
+            state.cursor_col = line.rfind('>').unwrap_or(0) + 1;
+            state.mode = Mode::Insert;
+            state.modified = true;
+            state.status_msg = format!("已插入: {}", line);
+            state.status_is_error = false;
+        }
         _ => {
             state.status_msg = format!("未知命令: {} (:help)", cmd);
             state.status_is_error = true;
         }
     }
-    state.mode = Mode::Normal;
+
+    if !stay_insert {
+        state.mode = Mode::Normal;
+    }
+}
+
+/// 把 "01" / "0x01" 归一为 "01"; 非法则原样返回 (让生成结果可见可改)。
+fn normalize_hex(h: &str) -> String {
+    h.strip_prefix("0x").unwrap_or(h).to_uppercase()
 }
 
 /// Validate ttoll syntax. Returns Some(error) if invalid.
@@ -610,7 +768,7 @@ fn draw(
         let (content_area, help_area) = if state.show_help {
             let right = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(10), Constraint::Length(12)])
+                .constraints([Constraint::Min(6), Constraint::Length(24)])
                 .split(panes[1]);
             (right[0], Some(right[1]))
         } else {
@@ -640,9 +798,9 @@ fn id_category(id: &str) -> &'static str {
 fn draw_id_panel(f: &mut ratatui::Frame, area: Rect, state: &EditorState) {
     let focused = state.pane == Pane::Ids;
     let block = Block::default()
-        .title(if focused { " ▶ ID 表 " } else { " ID 表 " })
+        .title(if focused { "> ID 表 " } else { " ID 表 " })
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(if focused { Color::Yellow } else { Color::Cyan }));
+        .border_style(if focused { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() });
 
     let entries = state.id_registry.all_entries();
     let mut lines: Vec<Line> = Vec::new();
@@ -661,20 +819,18 @@ fn draw_id_panel(f: &mut ratatui::Frame, area: Rect, state: &EditorState) {
                 lines.push(Line::from(""));
             }
             lines.push(Line::from(Span::styled(
-                format!("── {} ──", category),
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                format!("-- {} --", category),
+                Style::default().add_modifier(Modifier::BOLD),
             )));
             last_category = category;
         }
 
         let is_sel = focused && i == state.id_sel;
         let is_current = current_action.as_deref() == Some(e.id.as_str());
-        let style = if is_sel {
-            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
-        } else if is_current {
-            Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
+        let style = if is_sel || is_current {
+            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default()
         };
 
         lines.push(Line::from(vec![
@@ -700,26 +856,31 @@ fn extract_action_id(line: &str) -> Option<String> {
 fn draw_help_panel(f: &mut ratatui::Frame, area: Rect) {
     let block = Block::default()
         .title(" 按键帮助 (Ctrl+H 切换) ")
-        .borders(Borders::ALL)
-        .style(Style::default().fg(Color::Green));
+        .borders(Borders::ALL);
 
     let helps = vec![
-        Line::from(Span::styled("── ttoll 语法 ──", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from(vec![Span::styled(" 0x61,h>0x63", Style::default().fg(Color::Magenta)), Span::raw("  模式规则")]),
-        Line::from(vec![Span::styled(" CTRL+C>0x60", Style::default().fg(Color::Green)), Span::raw("  全局规则")]),
-        Line::from(vec![Span::styled(" (* 注释 *)", Style::default().fg(Color::DarkGray)), Span::raw("  注释")]),
+        Line::from(Span::styled("-- ttoll 语法 --", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(vec![Span::styled(" 0x01,ENTER>0x07", Style::default()), Span::raw("  模式规则")]),
+        Line::from(vec![Span::styled(" CTRL+SPACE>0x00", Style::default()), Span::raw("  全局规则")]),
+        Line::from(vec![Span::styled(" (* 注释 *)", Style::default()), Span::raw("  注释")]),
         Line::from(""),
-        Line::from(Span::styled("── 模式 ──", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from(vec![Span::styled(" 0x61", Style::default().fg(Color::Cyan)), Span::raw("  Normal 模式")]),
-        Line::from(vec![Span::styled(" 0x62", Style::default().fg(Color::Cyan)), Span::raw("  Insert 模式")]),
-        Line::from(vec![Span::styled(" 0x63", Style::default().fg(Color::Cyan)), Span::raw("  Command 模式")]),
+        Line::from(Span::styled("-- 模式 --", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(vec![Span::styled(" 0x01", Style::default()), Span::raw("  Normal 模式")]),
+        Line::from(vec![Span::styled(" 0x02", Style::default()), Span::raw("  Insert 模式")]),
+        Line::from(vec![Span::styled(" 0x03", Style::default()), Span::raw("  Command 模式")]),
         Line::from(""),
-        Line::from(Span::styled("── 命令 ──", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from(vec![Span::styled(" :w", Style::default().fg(Color::Cyan)), Span::raw("      保存")]),
-        Line::from(vec![Span::styled(" :wq", Style::default().fg(Color::Cyan)), Span::raw("     保存退出")]),
-        Line::from(vec![Span::styled(" :q!", Style::default().fg(Color::Cyan)), Span::raw("    强制退出")]),
-        Line::from(vec![Span::styled(" :ids", Style::default().fg(Color::Cyan)), Span::raw("     ID表")]),
-        Line::from(vec![Span::styled(" :help", Style::default().fg(Color::Cyan)), Span::raw("    帮助")]),
+        Line::from(Span::styled("-- 命令 --", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(vec![Span::styled(" :w/:w!", Style::default()), Span::raw("     保存/强制")]),
+        Line::from(vec![Span::styled(" :wq/:q/:q!", Style::default()), Span::raw("    退出")]),
+        Line::from(vec![Span::styled(" :map 01 UP 10", Style::default()), Span::raw(" 生成规则")]),
+        Line::from(vec![Span::styled(" :tmpl", Style::default()), Span::raw("     插入模板")]),
+        Line::from(vec![Span::styled(" :del", Style::default()), Span::raw("      删行")]),
+        Line::from(vec![Span::styled(" :ids/:help/:hide ids", Style::default()), Span::raw(" 面板")]),
+        Line::from(vec![Span::styled(" :s/:x/:h", Style::default()), Span::raw("    别名")]),
+        Line::from(""),
+        Line::from(Span::styled("-- 快捷键 (Normal) --", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(vec![Span::styled(" Ctrl+UP/DOWN", Style::default()), Span::raw("  首/末行  Ctrl+ENTER 保存")]),
+        Line::from(vec![Span::styled("  Ctrl+ESC 保存退出", Style::default()), Span::raw("   Alt+ENTER 帮助  Alt+Space 面板")]),
     ];
 
     let paragraph = Paragraph::new(helps).block(block).wrap(Wrap { trim: false });
@@ -750,9 +911,9 @@ fn draw_edit_area(f: &mut ratatui::Frame, area: Rect, state: &EditorState) {
 
         let spans = if line_idx == state.cursor_row && state.mode != Mode::Normal {
             let (before, ch, after) = split_at_byte(content, state.cursor_col);
-            let mut new_spans = vec![Span::styled(line_no, Style::default().fg(Color::DarkGray))];
+            let mut new_spans = vec![Span::styled(line_no, Style::default())];
             if content.trim().starts_with("(*") || content.trim().is_empty() {
-                new_spans.push(Span::styled(before.to_string(), Style::default().fg(Color::DarkGray)));
+                new_spans.push(Span::styled(before.to_string(), Style::default()));
             } else if let Some(parts) = highlight_ttoll_line(before) {
                 new_spans.extend(parts);
             } else {
@@ -764,9 +925,9 @@ fn draw_edit_area(f: &mut ratatui::Frame, area: Rect, state: &EditorState) {
             new_spans.push(Span::raw(after.to_string()));
             new_spans
         } else {
-            let mut spans = vec![Span::styled(line_no, Style::default().fg(Color::DarkGray))];
+            let mut spans = vec![Span::styled(line_no, Style::default())];
             if content.trim().starts_with("(*") || content.trim().is_empty() {
-                spans.push(Span::styled(content.clone(), Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(content.clone(), Style::default()));
             } else if let Some(highlighted) = highlight_ttoll_line(content) {
                 spans.extend(highlighted);
             } else {
@@ -792,27 +953,26 @@ fn highlight_ttoll_line(line: &str) -> Option<Vec<Span<'static>>> {
     if let Some(comma_pos) = lhs.find(',') {
         let mode = &lhs[..comma_pos];
         let keys = &lhs[comma_pos + 1..];
-        spans.push(Span::styled(mode.to_string(), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
-        spans.push(Span::styled(",", Style::default().fg(Color::DarkGray)));
-        spans.push(Span::styled(keys.to_string(), Style::default().fg(Color::Green)));
+        spans.push(Span::styled(mode.to_string(), Style::default().add_modifier(Modifier::BOLD)));
+        spans.push(Span::raw(","));
+        spans.push(Span::styled(keys.to_string(), Style::default()));
     } else {
-        spans.push(Span::styled(lhs.to_string(), Style::default().fg(Color::Green)));
+        spans.push(Span::styled(lhs.to_string(), Style::default()));
     }
 
-    spans.push(Span::styled(">", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
+    spans.push(Span::styled(">", Style::default().add_modifier(Modifier::BOLD)));
 
     let action = rhs.trim();
-    let action_color = if action.starts_with("0x") { Color::Cyan } else { Color::White };
-    spans.push(Span::styled(action.to_string(), Style::default().fg(action_color).add_modifier(Modifier::BOLD)));
+    spans.push(Span::styled(action.to_string(), Style::default().add_modifier(Modifier::BOLD)));
 
     Some(spans)
 }
 
 fn draw_status_bar(f: &mut ratatui::Frame, area: Rect, path: &std::path::Path, state: &EditorState) {
-    let (mode_str, mode_bg) = match state.mode {
-        Mode::Normal => (" NORMAL ", Color::Green),
-        Mode::Insert => (" INSERT ", Color::Yellow),
-        Mode::Command => (" COMMAND ", Color::Cyan),
+    let mode_str = match state.mode {
+        Mode::Normal => " NORMAL ",
+        Mode::Insert => " INSERT ",
+        Mode::Command => " COMMAND ",
     };
 
     let mod_str = if state.modified { " [+]" } else { "" };
@@ -824,14 +984,12 @@ fn draw_status_bar(f: &mut ratatui::Frame, area: Rect, path: &std::path::Path, s
     } else if !state.status_msg.is_empty() {
         state.status_msg.clone()
     } else {
-        "? 帮助 │ : 命令".to_string()
+        "? 帮助 | : 命令".to_string()
     };
 
-    let msg_color = if state.status_is_error { Color::Red } else { Color::White };
-
     let mut spans = vec![
-        Span::styled(mode_str, Style::default().fg(Color::Black).bg(mode_bg).add_modifier(Modifier::BOLD)),
-        Span::styled(format!(" {}{}", file_str, mod_str), Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 60))),
+        Span::styled(mode_str, Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!(" {}{}", file_str, mod_str)),
     ];
 
     let used = mode_str.len() + file_str.len() + mod_str.len() + cmd_display.len() + pos.len() + 4;
@@ -840,8 +998,8 @@ fn draw_status_bar(f: &mut ratatui::Frame, area: Rect, path: &std::path::Path, s
         spans.push(Span::raw(" ".repeat(width - used)));
     }
 
-    spans.push(Span::styled(format!(" {} ", pos), Style::default().fg(Color::DarkGray).bg(Color::Rgb(40, 40, 60))));
-    spans.push(Span::styled(&cmd_display, Style::default().fg(msg_color).bg(Color::Rgb(40, 40, 60))));
+    spans.push(Span::raw(format!(" {} ", pos)));
+    spans.push(Span::styled(&cmd_display, Style::default().add_modifier(Modifier::BOLD)));
 
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }

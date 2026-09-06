@@ -1,8 +1,5 @@
-// 下方新建行
+// 删除当前行
 #{
-    desc: "下方新建行",
-    run: || {
-    new_line("below");
-    set_mode(0x02)
-}
+    desc: "删除当前行",
+    run: || delete_line()
 }

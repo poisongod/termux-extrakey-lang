@@ -15,7 +15,6 @@
 //!       run: || exit()
 //!   }
 
-use crate::worker::script_runtime;
 use rhai::{Engine, FnPtr};
 use std::collections::HashMap;
 use std::fs;

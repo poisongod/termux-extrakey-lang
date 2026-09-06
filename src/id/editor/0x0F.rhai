@@ -1,8 +1,8 @@
-// 上方新建行
+// 下方新建行
 #{
-    desc: "上方新建行",
+    desc: "下方新建行",
     run: || {
-    new_line("above");
+    new_line("below");
     set_mode(0x02)
 }
 }

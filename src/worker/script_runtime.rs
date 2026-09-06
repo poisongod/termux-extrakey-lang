@@ -6,7 +6,6 @@
 
 use anyhow::Result;
 use rhai::{Engine, FnPtr};
-use std::sync::{Arc, Mutex};
 
 /// 引擎 + 注册池 AST 的打包体 —— 每个消费者持有一份。
 pub struct ScriptHost {
@@ -36,7 +35,7 @@ impl ScriptHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     /// 演示用消费者状态
     #[derive(Default)]

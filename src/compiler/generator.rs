@@ -1,11 +1,10 @@
 use crate::lib;
-use std::path::Path;
 
 /// Compile a tekl source file to extra-keys JSON and write to termux.properties.
 pub fn run_compile(
     file: &Option<String>,
     output: &Option<String>,
-    watch: bool,
+    _watch: bool,
     reload: bool,
 ) -> anyhow::Result<()> {
     let layout_path = resolve_layout_file(file)?;
