@@ -1,183 +1,362 @@
-# tekl — Termux 键盘布局 DSL + TUI 工具链（Rust）
+# tekl
 
-Termux extra-keys 的声明式配置语言、交互式 TUI 编辑器与热部署工具链。
-目标：**完全替代 `termux.properties`**，改布局只碰一个 `.tekl` 文件。
+**Termux Extra key Language** — 键盘布局 DSL + TUI 工具链。
 
-> **当前架构 = Rust Core + Rhai ID 插件**，全仓库无 Node.js 依赖。
+用一门小语言描述 Termux 额外按键行（extra-keys），配合两套终端 UI 可视化编辑
+（键盘布局编辑、行为规则编辑），并一键编译回写 `termux.properties` 热部署。
+
+- Rust Core（微内核）+ Rhai ID 插件，GPL-3.0（`LICENSE`）
+- 当前版本 v0.3.0
+- 需求文档：`tekl-PRD.md`；文法：`ebnf/*.ebnf`（另有 `.ebnf.txt` 同文副本）
+
+```
+        .tekl 源码                 ttoll 规则                ID 插件
+ ┌──────────────────┐     ┌────────────────────┐    ┌──────────────────┐
+ │ keys.layout 语法  │     │ 按键 → 行为 ID 接线 │    │ 每个 ID 一个 .rhai│
+ │ ESC; TAB "~"; …  │     │ 0x01,UP>0x10 …     │    │ #{run: || …}      │
+ └──────────────────┘     └────────────────────┘    └──────────────────┘
+        │                          │                         │
+        v                          v                         v
+   keys 编译器               dispatch 表                Rhai 引擎 (微内核 API)
+        │                                                    │
+        v                                                    v
+  extra-keys JSON      ┌───────────────────────────────────────┐
+        │              │  Arc<Mutex<App>> / <EditorState> 状态 │
+        v              └───────────────────────────────────────┘
+  termux.properties
+        │
+        v
+  termux-reload-settings
+```
+
+## 目录
+
+- [安装与构建](#安装与构建)
+- [快速开始](#快速开始)
+- [tekl：键盘布局语言](#tekl键盘布局语言)
+- [ttoll：行为规则语言](#ttoll行为规则语言)
+- [ID 插件系统（微内核完整实现清单）](#id-插件系统)
+- [数据文件](#数据文件)
+- [热部署 reload](#热部署-reload)
+- [架构与契约](#架构与契约)
+- [测试](#测试)
+- [许可](#许可)
 
 ---
 
-## 1. 双层受众
+## 安装与构建
 
-| 受众 | 面向 | 使用的东西 | 产出 |
-|---|---|---|---|
-| **普通用户** | 编辑键盘布局 | `tekl edit xxx.tekl`（布局 TUI） | `~/.termux/termux.tekl` → 编译写入 termux.properties |
-| **插件开发者** | 定制行为/扩展操作 | `ttoll` 规则 + `<ID>.rhai` 插件 | 按键→ID 接线 + ID→逻辑实现 |
+在 Termux 中构建（避免 rustup 空壳遮蔽系统工具链）：
 
-两层通过**十六进制 ID** 解耦：ttoll 只接线不实现，Rhai 只实现不接线。
-普通用户永远不需要接触第二层。
-
-## 2. 核心数据流
-
-```
-按键事件
-   ↓ 事件归一化（Core: KeyEvent → 键名 token，和弦 CTRL+X）
-ttoll dispatch（查 <consumer>.ttoll 规则表：模式+键名 → 动作ID）
-   ↓
-IdRegistry.eval_action(ID)          ← 仅查本消费者的注册池
-   ↓
-Rhai 引擎调用该 ID 的 run 闭包       ← src/id/<consumer>/<ID>.rhai
-   ↓  闭包内调用宿主函数（exit/focus/save…），被记录为 HostOp 序列
-apply_host_op 回放                   ← Core 把 HostOp 应用到 TUI 状态
-   ↓
-界面更新 / 写盘退出
+```bash
+PATH=/data/data/com.termux/files/usr/bin:$PATH cargo build --release
+cp target/release/tekl $PREFIX/bin/tekl        # 通常即上面的 /data/data/.../usr/bin
 ```
 
-**无硬编码原则**：TUI 的所有按键行为由 `.ttoll` 定义接线，所有操作语义由 `.rhai`
-的 `run` 闭包定义。Core 只提供三样东西：事件归一化、dispatch 解释器、宿主函数。
+> release 配置了 LTO + opt-level z，构建较慢；开发期用
+> `cargo build`（debug）后拷贝同一路径即可。
 
-## 3. 用户可见的文件
+## 快速开始
 
-```
-~/.termux/
-├── termux.tekl        # 键盘布局源码（普通用户唯一需要关心的文件）
-├── tekl.ttoll         # 布局 TUI 的行为规则      ┐
-├── editor.ttoll       # ttoll 编辑器的行为规则    ├─ 插件开发者层
-└── id/<ID>.rhai       # 用户 ID 插件扩展（出厂为空）┘
-```
+三个入口命令（子命令的 `<file>` 为必填；不带子命令即进入布局 TUI）：
 
-内置 ID 插件随二进制发布（编译期清单嵌入，见 `src/lib/id.rs` 的
-`TUI_IDS` / `EDITOR_IDS`），开箱即用；用户目录只做**增量扩展，不覆盖内置**。
-
-## 4. ID 插件规范（一 ID 一文件）
-
-文件名即 ID。`src/id/tui/0x00.rhai`：
-
-```rhai
-// 退出/返回
-#{
-    desc: "退出/返回",
-    run: || exit()
-}
+```bash
+tekl                              # 布局 TUI，编辑 ~/.termux/termux.tekl（缺失则空布局）
+tekl edit <file>                  # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错
+tekl reload <file> [--no-reload]  # 编译 .tekl → termux.properties → termux-reload-settings
 ```
 
-组合操作直接在 `run` 里写 Rhai：
+### 布局 TUI（`tekl` / `tekl edit keys.tekl`）
 
-```rhai
-// src/id/editor/0x17.rhai — 保存退出
-#{
-    desc: "保存退出",
-    run: || { save(true); exit() }
-}
+- **键盘浏览**（Normal，`0x01`）：方向键移动焦点；`SPACE` 选中/取消；`ENTER` 进入主键编辑；
+  `ESC` 退出。预览区按当前模式显示键值（Normal/Edit 显示主键值，Popup 显示弹出键值）。
+- **主键编辑**（Edit，`0x02`）：直接输入键名/标签/宏文本；`Tab` 在字段
+  Key → Display → Macro → Popup 间循环；`ENTER` 应用并返回。
+- **弹出键编辑**（Popup，`0x03`）：编辑弹出键值，字段限定在弹出内容。
+- 插入菜单（由 `0x40` 打开）：增行/增列/删列，Enter 确认后交 ID 插件执行。
+- `Ctrl+S` 保存、`Ctrl+C` 退出 —— 输入层硬编码，不经 ttoll。
+
+### 行为规则编辑器（`tekl edit editor.ttoll`）
+
+双分区：左侧 ID 表（内置 + 用户插件），右侧 ttoll 规则文件编辑区。ID 表里
+选中某个 ID 后按 `Enter` 跳到内容区中该 ID 对应的接线行；未接线则提示用
+`:map` 生成。
+
+- Normal：方向键移动光标；`ENTER` 进入插入；`SPACE` 进入命令；`ESC` 退出；
+  `Ctrl+UP/DOWN` 跳首/末行；`Ctrl+ENTER` 保存（校验）；`Ctrl+ESC` 保存退出；
+  `Alt+ENTER` 帮助；`Alt+Space` 切换 ID 面板。
+- Insert：字符/退格/`Tab` 输入；`ENTER` 换行；`ESC` 返回 Normal。
+- Command：输入命令后 `ENTER` 执行，`ESC` 放弃。状态栏实时回显 `:命令`。
+- `ALT+LEFT` / `ALT+RIGHT` 切换左/右分区（输入层，不经 ttoll）；`Ctrl+C` 强制退出。
+
+### 命令（Command 模式）
+
+```text
+:w :s       校验并保存
+:w! :s!     强制保存
+:wq :x      保存并退出
+:q          退出（有改动则拒绝，用 :q!）
+:q!         放弃改动退出
+:map 01 UP 10   生成合法接线行 0x01,UP>0x10（光标停在 ID 处直接改写）
+:tmpl       插入模板 0x01,UP>0x10
+:del        删除当前行
+:ids        在状态栏列出全部 ID
+:set ids / :hide ids   焦点切到 ID 面板 / 内容面板
+:help :h    帮助
 ```
 
-- `desc`：描述（编辑器左栏 ID 表显示）
-- `run`：Rhai 闭包，即**实际实现**；调用宿主函数组合出操作序列
+生成规则不必打 `,` `>` `0x` 等符号——`:map 01 UP 10` 全是字母数字，
+手机端也能顺手输入。
 
-### 编号约定
+## tekl：键盘布局语言
 
-- `0x00` 全局等同 = 退出（每个消费者的注册池都有）
-- 其余 ID 各消费者**从 `0x01` 起**独立编号，互不共享、语义独立
-- 布局 TUI 内置段：0x01–0x53；编辑器内置段：0x01–0x17（按使用场景频率排序）
+词法/语法/编译/打印实现于 `src/lib/keys.rs`，文法见 `ebnf/tekl.ebnf`。
+序列化结果必须能被自身解析器还原（round-trip 契约）。
 
-### 宿主函数词汇表（Rhai ↔ Rust 接口）
-
-| 分类 | 函数 |
+| 写法 | 含义 |
 |---|---|
-| 系统 | `exit()` `set_mode(n)` |
-| 矩阵 | `focus(dir)` `add_row(pos)` `add_col(pos)` `del_row()` `del_col()` `swap_row()` `swap_col()` `select_key()` `swap_key()` |
-| 面板 | `show_matrix(kind)` `input_value(kind)` `input_name(kind)` `toggle_panel(kind)` |
-| 编辑 | `cursor(dir)` `jump(t)` `delete_char()` `delete_line()` `new_line(pos)` `insert_text(s)` `backspace()` `exec_cmd()` `cancel_cmd()` |
-| 文件 | `save(validate)` `apply()` |
+| `ESC` | 命名键（大写键名） |
+| `a` | 字面键（小写字符/串），如 `d`、`;`、`"\\"` |
+| `A:B` | 重命名标签，如 `UP:Home` |
+| `A(B)` | 组合键，可嵌套，如 `CTRL(c)`、`KEYBOARD(CTRL(d))` |
+| `A(B):Label` | 组合键重命名 |
+| `A.B` | 弹出键（A 为主键，B 为弹出内容），可 `A.B:Label` |
+| `;` | 键盘行分隔符 |
 
-宿主调用被记录为类型化 `HostOp` 序列（记录-回放模式），由消费者同步应用到自身
-状态——脚本求值无副作用，无需跨线程共享 UI 状态。
+示例（仓库 `keys.layout`）：
 
-## 5. ttoll 行为规则（文法已冻结）
-
-权威文法：`ebnf/ttoll.ebnf`。键词汇固定为 **K ∪ D 共 9 个**：
-
-```
-K = ESC ALT CTRL SPACE ENTER        D = UP DOWN LEFT RIGHT
-M = 0x01 | 0x02 | 0x03              ID = 0x + 两位十六进制
-C = M ',' 步序列 | 步序列            步 = KEY | CTRL+X 和弦 | '{'集合'}' | KEY*
-R = C '>' ID                        P = { R '\n' }
+```text
+ESC.DRAWER "["."{" "]"."}" "\\"."|" UP.HOME "="."+" KEYBOARD.CTRL(d);
+TAB."~" Ctrl Alt Left."<" Down.End Right.">" Enter.Paste;
 ```
 
-示例（`editor.ttoll`）：
+> 真实际子：字面串里的反斜杠要转义为 `"\\"`（上例为 `\` 与 `|` 键）。
 
-```
-CTRL+C>0x00          (* 全局：退出 *)
-0x01,LEFT>0x01       (* Normal 模式：← 移动光标 *)
-0x01,ENTER>0x07      (* 进入插入模式 *)
-0x01,CTRL+LEFT>0x0D  (* 和弦：删除字符 *)
-```
+## ttoll：行为规则语言
 
-不在词汇表内的键（如字母键）不属于文法——输入层的字符输入/退格/Tab 属于
-Insert 模式的"打字"，不经过 ttoll。
+TUI 操作逻辑语言：把按键事件映射到行为 ID。输入层（`src/tui/app.rs` /
+`editor.rs`）先把 crossterm 事件归一化为键名，再按当前模式号查规则表分派。
+解析/分派实现于 `src/lib/behavior.rs`，文法见 `ebnf/ttoll.ebnf`。
 
-## 6. 目录地图
+规则形式：
 
-```
-src/
-├── main.rs                 入口：tekl [edit|reload]
-├── id/
-│   ├── tui/<ID>.rhai ×25   内置 ID 插件（布局 TUI）
-│   └── editor/<ID>.rhai ×24 内置 ID 插件（ttoll 编辑器）
-├── lib/                    ★ 共享核心
-│   ├── keys.rs             tekl 词法/语法/编译/打印（含往返一致性约束）
-│   ├── behavior.rs         ttoll 解析 + dispatch/dispatch_chord + 静态检查
-│   ├── id.rs               IdRegistry：清单嵌入、用户扫描、eval_action
-│   ├── keyset.rs           按键词汇表
-│   ├── check.rs            tjek 校验报告
-│   ├── validate.rs         四字段 JSON 校验
-│   ├── json_dsl.rs         Android JSONTokener 兼容解析
-│   └── user_dir.rs         ~/.termux 目录规范
-├── tui/
-│   ├── app.rs              布局 TUI（消费 tui.rhai + tekl.ttoll）
-│   ├── editor.rs           ttoll 编辑器：双分区（左 ID 表｜右内容）
-│   ├── mode.rs             模式枚举 0x01/0x02/0x03
-│   ├── keymap.rs preview.rs render.rs
-├── worker/
-│   └── script_runtime.rs   ★ Rhai 引擎 + HostOp 记录-回放 + 宿主注册
-├── compiler/generator.rs   reload 子命令：编译 .tekl 并写盘
-└── termux/writer.rs        termux.properties 原子写（extra-keys 行替换）
-
-keys.layout                 布局样例（出厂模板）
-behavior.base               TUI 规则基座模板（首次运行复制到 ~/.termux/ui/init.ttoll）
+```text
+0x02,ESC>0x01        # 模式,键 → ID（最常用形式）
+0x03,ENTER>0x13
+CTRL+SPACE>0x40      # 和弦可作全局规则（无模式前缀时任意模式生效）
+0x01,ALT+LEFT>0x42
 ```
 
-## 7. 构建 / 安装 / 测试
+### 文法冻结（K ∪ D）
+
+键词汇**固定**为 9 键两族：
+
+- **K** = `ESC` `ALT` `CTRL` `SPACE` `ENTER`
+- **D** = `UP` `DOWN` `LEFT` `RIGHT`
+
+约束（解释器直接拒绝非法形式）：
+
+- 和弦 `CTRL+x` / `ALT+x` 的 x **必须也是文法键**：`CTRL+SPACE`、`ALT+LEFT` 合法；
+  `CTRL+C`、`CTRL+S` 等字符级和弦 **非法**。
+- 字符键 `i`、`Enter` 打引号形式均不产生分派候选。
+
+改变文法 = 破坏性变更，须同步 `behavior.rs`、全部 `.ttoll`、测试与
+`ebnf/*.ebnf(.txt)` 双份。
+
+### 输入层硬编码（不经 ttoll）
+
+以下行为由输入层内部处理，不查规则表、不可被 `.ttoll` 覆盖：
+
+- **系统快捷键**：布局 TUI `Ctrl+C` 退出、`Ctrl+S` 保存；编辑器 `Ctrl+C` 强退。
+- **打字**：编辑器 Insert 模式的字符/退格/`Tab`；布局 TUI Edit/Popup 模式的文本编辑。
+- **界面导航**：编辑器 `ALT+LEFT/RIGHT` 切换分区、ID 表 `↑↓` 滚动。
+
+### 默认接线
+
+布局 TUI 规则模板 `behavior.base`（内容即 `tekl.ttoll` 规则，首次运行复制至
+`~/.termux/ui/init.ttoll`）：
+
+```text
+0x01,ESC>0x00        # 退出
+0x01,UP>0x10 0x01,DOWN>0x11 0x01,LEFT>0x12 0x01,RIGHT>0x13
+0x01,ENTER>0x02      # 主键编辑
+0x01,SPACE>0x30      # 选中/取消
+0x01,CTRL+SPACE>0x40 # 插入菜单（键帽/矩阵操作）
+```
+
+编辑器规则 `editor.ttoll`：
+
+```text
+0x01,UP>0x04 0x01,DOWN>0x03 0x01,LEFT>0x01 0x01,RIGHT>0x02
+0x01,ENTER>0x07      # 进入插入模式
+0x01,SPACE>0x08      # 进入命令模式
+0x01,ESC>0x00        # 退出
+0x01,CTRL+UP>0x05    # 跳首行         0x01,CTRL+DOWN>0x06   # 跳末行
+0x01,ALT+ENTER>0x12  # 帮助           0x01,ALT+SPACE>0x11   # 切 ID 面板
+0x01,CTRL+ENTER>0x15 # 保存(校验)     0x01,CTRL+ESC>0x17    # 保存退出
+0x02,ESC>0x09        # Insert → Normal
+0x02,ENTER>0x0B      # 换行
+0x03,ESC>0x09        # Command → Normal
+0x03,ENTER>0x13      # 执行命令
+```
+
+## ID 插件系统
+
+**微内核即完整实现**：id.txt 列出的每一个 ID，都有对应的 `.rhai` 插件文件与核心原语支撑，
+三处清单一一对应、缺一不可：
+
+1. `id.txt` —— 人工速查表（非真相源）
+2. `src/id/{tui,editor}/<ID>.rhai` —— 真相源，文件名即 ID，`run: || 闭包`
+3. `src/lib/id.rs` —— `TUI_IDS` / `EDITOR_IDS` 编译期 `include_str!` 清单
+
+每个插件是 Rhai 对象字面量，至少含 `desc` 与 `run`：
+
+```rhai
+// src/id/tui/0x10.rhai — 焦点上移
+#{
+    desc: "焦点上移",
+    run: || if cursor_row() > 0 { set_cursor(cursor_row() - 1, cursor_col()) }
+}
+```
+
+`run` 闭包调用**核心提供的细粒度原语**（读 + 原子写），自行组合守卫与路由。
+
+### 内置 ID 一览
+
+布局 TUI（`id.txt`，含 0x00–0x53 共 25 个）：
+
+```text
+0x00  退出/返回          0x10-13  焦点上/下/左/右
+0x01  键盘模式          0x20/21  行前/后增行
+0x02  主键编辑          0x22/23  列前/后增列
+0x03  弹出键编辑        0x24/25  删除当前行/列
+0x04  应用编辑并返回    0x26/27  交换行/列
+0x30  选中/取消          0x31  交换键
+0x40  主键值矩阵(插入菜单)  0x41  主键值输入框   0x42  主键名输入框
+0x50  弹出键值矩阵      0x51  弹出键值输入框  0x53  弹出键名输入框
+```
+
+ttoll 编辑器（0x00–0x17 共 24 个）：
+
+```text
+0x00  退出
+0x01-04  光标左/右/下/上     0x0A  退格            0x11  切换ID面板
+0x05  跳转首行              0x0B  换行(拆行)       0x12  切换帮助
+0x06  跳转末行              0x0C  插入Tab         0x13  执行命令
+0x07  进入插入模式          0x0D  删除字符        0x14  退出命令
+0x08  进入命令模式          0x0E  删除当前行      0x15  保存(校验)
+0x09  返回Normal            0x0F  下方新建行      0x16  强制保存
+                            0x10  上方新建行      0x17  保存退出
+```
+
+### 用户扩展
+
+`~/.termux/id/<ID>.rhai` 可增加自定义 ID（出厂为空目录，同名内置被警告忽略）。
+文件名即 ID；用户插件**只增加、不覆盖**内置。
+
+### 注册池隔离
+
+- 布局 TUI ↔ `tui` 清单 + `tekl.ttoll`
+- 编辑器 ↔ `editor` 清单 + `editor.ttoll`
+- `0x00` 两池等同（退出），其余 ID 各自独立编号。
+
+> **增删内置 ID 两处联动**：新建/删除 `<ID>.rhai` 时，必须同步
+> `src/lib/id.rs` 清单，否则不生效。
+
+### 模式号两套语义
+
+- 布局 TUI：`0x01` 键盘浏览 / `0x02` 主键编辑 / `0x03` 弹出键编辑
+- ttoll 编辑器：`0x01` Normal / `0x02` Insert / `0x03` Command
+
+互不共享、同名异义，规则表的模式号按各自消费者解释。
+
+## 数据文件
+
+| 路径 | 内容 |
+|---|---|
+| `~/.termux/termux.tekl` | 键盘布局源码（首次运行从 `keys.layout` 复制） |
+| `~/.termux/tekl.ttoll` | 布局 TUI 行为规则（仓库不带，由开发者放置） |
+| `~/.termux/editor.ttoll` | 编辑器行为规则（同左，仓库 `editor.ttoll` 为模板） |
+| `~/.termux/ui/init.ttoll` | 布局 TUI 规则（首次运行从 `behavior.base` 复制） |
+| `~/.termux/id/` | 用户 ID 插件目录 |
+
+> **注意**：`tekl.ttoll` / `editor.ttoll` 默认不存在。规则文件缺失时 dispatch 表为空，
+> 所有按键无效。首次运行 `provision_user_dir` 只创建 `termux.tekl` 与
+> `ui/init.ttoll`。要跑起来须先放置规则文件 —— `behavior.base` 内容即
+> `tekl.ttoll` 规则（亦可直接 `cp behavior.base ~/.termux/tekl.ttoll`）。
+>
+> 也是因为这一点，`Cargo.toml` 无 `[lib]` target —— 全部代码是 bin crate 内的
+> `mod`，`cargo test` 直接在二进制目标上跑。
+
+## 热部署 reload
+
+`tekl reload <file>`（`src/compiler/generator.rs` + `src/termux/`）：
+
+1. **编译**：读取 `.tekl` → `keys::compile_source` 得 `extra-keys` JSON 行（含警告）。
+2. **原子写盘**：替换/追加 `~/.termux/termux.properties` 中 `extra-keys = ...` 行；
+   先写临时文件再 rename，写前备份 `*.tekl.bak`，写后读回校验。
+3. **生效**：调用 `termux-reload-settings`；失败仅告警不致命（文件已写入）。
+
+`--no-reload` 跳过第 3 步。
+
+## 架构与契约
+
+### 前后端分离硬契约
+
+- **Rust 核心 = 前端 UI**：渲染、事件读取、输入层归一化 —— **不写任何策略**。
+- **完整 API**：细粒度 read/write 原语与不可再分的原子数据操作
+  （`set_cursor` / `insert_text` / `add_row` / `save_file` / `apply_edit` …）。
+- **rhai 插件 = 全部操作逻辑**：守卫、路由、组合都写在各 `.rhai` 的 `run` 闭包里
+  （如 `if cursor_row() > 0 { set_cursor(...) }`）。
+- **事件层不实现操作**：阶段一短暂持锁产出待动作键名/ID，阶段二在无锁状态下
+  dispatch → Rhai 闭包执行。布局 TUI 插入菜单 Enter 只返回动作 ID，不直接改数据。
+
+> 改行为 = 改 `.ttoll` / `.rhai`（或加核心原语）；核心事件分支禁止写操作逻辑。
+
+### 直接执行模型
+
+`run` 闭包经引擎内注册的原语**直接读写** `Arc<Mutex<状态>>`，无中间操作/回放层
+（`src/worker/script_runtime.rs`）：
+
+```rust
+let shared = Arc::new(Mutex::new(app));
+let host = ScriptHost { engine: tui_engine(shared.clone()).engine, lib };
+// …事件归一化后调 host.call(run)…
+```
+
+状态所有权归 UI，全部注册原语捕获句柄克隆，引擎内部自行加锁。
+
+### 核心 API 原语
+
+布局 TUI（`app.rs::tui_engine`）：
+
+| 类别 | 原语 |
+|---|---|
+| 读 | `cursor_row` `cursor_col` `row_count` `col_count` `selected_row` `selected_col` |
+| 写 | `set_cursor` `set_selected` `clear_selection` |
+| 原子操作 | `add_row("before"/"after")` `add_col(…)` `del_row` `del_col` `swap_row` `swap_col` `swap_key` |
+| 系统/模式 | `set_mode(0x01/0x02/0x03)` `exit` `save_file` `apply_edit` |
+| UI 控制 | `show_matrix` `input_value` `input_name` |
+
+ttoll 编辑器（`editor.rs::ed_engine`）：
+
+| 类别 | 原语 |
+|---|---|
+| 读 | `cursor_row` `cursor_col` `row_count` `line_len` |
+| 写/编辑 | `set_cursor` `insert_text` `backspace` `delete_char` `delete_line` `new_line("above"/"below")` `split_line` |
+| 模式/面板 | `set_mode` `toggle_panel("id"/"help")` `cancel_cmd` |
+| 命令/文件 | `exec_cmd` `save(true/false)` `exit` |
+
+## 测试
 
 ```bash
-cargo test              # 单元测试（纯数据层为主，TUI 交互靠实机验证）
-cargo build --release
-cp target/release/tekl $PREFIX/bin/tekl    # Termux 安装
+cargo test
 ```
 
-> Termux 注意：若 `~/.cargo/bin` 里有 rustup 空壳（无 toolchain）会遮蔽系统
-> cargo/rustc，用 `PATH=/data/data/com.termux/files/usr/bin:$PATH cargo …`
-> 或卸载 rustup shim。
+覆盖：tekl 词法/语法/round-trip、ttoll 解析与文法冻结（拒绝 `CTRL+C` 等字符级和弦）、
+ID 注册池、Rhai 脚本加载、布局矩阵行/列/移动/交换等纯数据测试（当前 118 通过）。
+交互（ratatui raw mode）靠实机验证。
 
-```bash
-tekl                    # 默认启动布局 TUI
-tekl edit <file>        # .tekl → 布局 TUI；.ttoll → 双分区行为编辑器
-tekl reload [--no-reload]  # 编译 .tekl → termux.properties → termux-reload-settings
-```
+## 许可
 
-编辑器分区：左栏 ID 表（只读浏览，↑↓ 滚动），右栏可编辑内容；
-`ALT+←/→` 切换焦点。Normal 模式按键全部由 `~/.termux/editor.ttoll` 接线。
-
-## 8. 测试与质量约定
-
-- `cargo test`：解析器、dispatch、ID 注册池、Rhai 记录-回放均有纯数据测试
-- 往返一致性：`keys.rs` 序列化后必须能被同一解析器还原（round-trip 契约）
-- 文法冻结：修改 `ebnf/ttoll.ebnf` 视同破坏性变更，需同步 `behavior.rs` 与全部 `.ttoll`
-- 行为调整的正确姿势：**只改 `.ttoll` / `.rhai` 数据文件，不改源码**
-
-## 9. 路线图
-
-1. **ttoll JIT 真实现**：目标为由 `ebnf/ttoll.ebnf` 驱动的规则编译 + 静态检查前置
-   （现由 `behavior.rs` 手写递归下降承担）
-2. **规则/插件热加载**：编辑器运行中监听 `.ttoll` 与 `id/*.rhai` 变更，保存即生效
-3. Worker 隔离落地：action 执行超时与 panic 隔离
+GPL-3.0-or-later（见 `LICENSE`）。

@@ -5,3 +5,4 @@ opentui/
 # Added by cargo
 
 /target
+release/

@@ -1,53 +1,92 @@
 # AGENTS.md
 
 tekl — Termux 键盘布局 DSL + TUI 工具链。**Rust Core + Rhai ID 插件**，GPL-3.0。
-权威文档：`README.md`（架构与目录地图）、`tekl-PRD.md`（产品需求）、`ebnf/*.ebnf`（文法）。
+权威文档：`README.md`（架构）、`tekl-PRD.md`（需求）、`ebnf/*.ebnf`（文法）。
+
+> ⚠️ README 的「HostOp 记录-回放」一节已过时：当前是**直接执行模型**
+> （stub：`src/worker/script_runtime.rs`、`src/tui/app.rs::tui_engine`、`src/tui/editor.rs::ed_engine`）。
 
 ## 布局
 
-- `src/main.rs` — 入口；子命令 `edit`（默认 TUI）/ `reload`（编译布局并写盘）
-- `src/lib/` — 共享核心：
+- `src/main.rs` — 入口。子命令 `edit` / `reload` 的 `<file>` 均为必填；无参即布局 TUI。
+- `src/lib/` — 共享核心（**Cargo.toml 无 [lib]，只是 bin crate 内的 `mod lib`**）：
   - `keys.rs` tekl 词法/语法/编译/打印（round-trip 契约）
   - `behavior.rs` ttoll 解析 + `dispatch`/`dispatch_chord` + 静态检查
-  - `id.rs` `IdRegistry`：内置清单（include_str!）+ 用户 `~/.termux/id/<ID>.rhai` 扫描
+  - `id.rs` `IdRegistry`：内置 `include_str!` 清单 + 用户 `~/.termux/id/` 扫描
   - `check.rs` `validate.rs` `json_dsl.rs` `keyset.rs` `user_dir.rs`
-- `src/tui/` — `app.rs`（布局 TUI）+ `editor.rs`（双分区行为编辑器）+ mode/keymap/preview/render
-- `src/id/{tui,editor}/<ID>.rhai` — 内置 ID 插件，**一 ID 一文件，文件名即 ID**
-- `src/worker/script_runtime.rs` — Rhai 引擎；宿主函数调用记录为 `HostOp` 序列，消费者回放
-- `src/compiler/generator.rs` + `src/termux/writer.rs` — reload 子命令的编译与原子写盘
-- 数据模板：`keys.layout`（布局样例）、`behavior.base`（TUI 规则基座，首次运行复制到主目录）
+- `src/tui/` — `app.rs`（布局 TUI）+ `editor.rs`（双分区行为编辑器）+ `preview.rs`（键盘预览渲染）
+- `src/id/{tui,editor}/<ID>.rhai` — 内置插件，**一 ID 一文件，文件名即 ID**
+- `src/worker/script_runtime.rs` — Rhai 引擎封装 `ScriptHost{engine, lib}`；消费者把状态包进
+  `Arc<Mutex<S>>`，在 `tui_engine`/`ed_engine` 用 `register_fn` 注册读写原语（捕获句柄）
+- `src/compiler/generator.rs` + `src/termux/writer.rs` — reload 的编译与原子写盘
+- 数据模板：`keys.layout`（布局样例）、`behavior.base`（**内容即 tekl.ttoll 规则**，首次运行复制到主目录）
 
 ## 命令
 
 ```bash
-cargo test                                    # 全部单元测试
+PATH=/data/data/com.termux/files/usr/bin:$PATH cargo …   # 见下方 Termux 坑
 cargo build --release
-cp target/release/tekl $PREFIX/bin/tekl       # Termux 安装
+cp target/release/tekl $PREFIX/bin/tekl                 # Termux 安装
 ```
-
-> Termux 坑：`~/.cargo/bin` 的 rustup 空壳会遮蔽系统 cargo/rustc。
-> 用 `PATH=/data/data/com.termux/files/usr/bin:$PATH cargo …`。
 
 运行：
 
 ```bash
-tekl edit <file>   # .tekl → 布局 TUI；.ttoll → 行为编辑器（左 ID 表｜右内容）
-tekl reload        # 编译 ~/.termux/termux.tekl → termux.properties → 热更新
+tekl                          # 布局 TUI，编辑 ~/.termux/termux.tekl（缺失则空布局）
+tekl edit <file>              # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错退出
+tekl reload <file> [--no-reload]
+                              # 编译 .tekl → termux.properties（原子写+读回校验）→ termux-reload-settings
 ```
+
+## ⚠️ 真实性注意（与文档/直觉不符处）
+
+- **`cargo test` 当前编译失败**：`src/worker/script_runtime.rs` 的 tests 缺
+  `use std::sync::Arc;`（bin test 目标 5 个 E0425/E0433）。无 [lib] target，全部测试在 bin crate 内，
+  修掉该 import 后才能跑测试。`cargo build` 正常。
+- **行为规则文件缺省即空表**：TUI 读 `~/.termux/tekl.ttoll`、编辑器读 `~/.termux/editor.ttoll`，
+  仓库都不带这两个文件。`provision_user_dir` 只创建 `~/.termux/ui/init.ttoll`（来自 `behavior.base`）
+  与 `~/.termux/termux.tekl`（来自 `keys.layout`）。规则文件缺失时 dispatch 表为空，所有按键无效——
+  要跑起来须先手动放入（`behavior.base` 内容即 tekl.ttoll 规则）。
+- **模式号两套语义**：`0x01/0x02/0x03` 在布局 TUI 是 Normal/Edit/Popup（`Mode` in app.rs），
+  在 ttoll 编辑器是 Normal/Insert/Command（`Mode` in editor.rs），互不共享。
+- `id.txt` 只是人工速查表；ID 的 `desc` 真相源是各 `.rhai` 文件。
 
 ## 关键不变量
 
-- **无硬编码操作逻辑**：按键→ID 在 `.ttoll`，ID→实现在 `.rhai` 的 `run` 闭包；
-  Core 只做事件归一化 / dispatch / 宿主函数。改行为 = 改数据文件，不改源码。
+- **前后端分离硬契约**：Rust 核心 = 前端 UI（渲染/事件读取/输入层归一化）+ 完整 API（细粒度
+  read/write 原语与不可再分的原子数据操作，如 `set_cursor`/`insert_text`/`add_row`/`save_file`），
+  **不写任何策略**。所有操作组合/守卫/路由决策在 `.rhai` 的 `run` 闭包里（如 `if cursor_row() > 0 {...}`）。
+  事件层必须把动作交给 dispatch→rhai（布局 TUI 插入菜单 Enter 只返回 action ID，不直接改数据）。
+  新增功能 = 加 rhai 插件 +（必要时）加核心原语；禁止在 Rust 事件分支里实现操作逻辑。
+- **无硬编码操作逻辑**：按键→ID 由 `.ttoll` 接线，ID→实现是 `.rhai` 的 `run` 闭包；
+  Core 只做事件归一化 / dispatch / 原语注册。改行为 = 改数据文件（或加原语），不改 consumer 逻辑。
+- **直接执行模型**：`run` 闭包经引擎内注册的原语直接读写 `Arc<Mutex<S>>` 状态（如
+  `if cursor_row() > 0 { set_cursor(...) }`），不再经 HostOp 回放。事件循环两阶段：
+  阶段一短暂持锁做路由/输入层处理，阶段二无锁执行 Rhai（引擎内部自行加锁）。
+- **增删内置 ID 两处联动**：新建/删除 `src/id/{tui,editor}/<ID>.rhai` 的同时，必须同步
+  `src/lib/id.rs` 的 `TUI_IDS` / `EDITOR_IDS` 清单（增一行 `include_str!`），否则不生效。
+  用户 `~/.termux/id/` 只增不覆盖（同名内置被警告忽略）。
+- **注册池按消费者隔离**：布局 TUI↔`tui` 清单 + `tekl.ttoll`，编辑器↔`editor` 清单 + `editor.ttoll`；
+  `0x00` 全局等同（退出），其余各自独立编号。
 - **文法冻结**：`ebnf/ttoll.ebnf` 键词汇固定 K∪D 共 9 个（ESC/ALT/CTRL/SPACE/ENTER + 四方向）。
-  改文法 = 破坏性变更，须同步 behavior.rs 与全部 .ttoll 及测试。
-- **一 ID 一文件**：`<0xHH>.rhai` 只含该 ID 的 `desc` + `run`；内置经清单嵌入，
-  用户 `~/.termux/id/` 只增不覆盖。
-- **注册池按消费者隔离**：TUI↔`tui.rhai`+`tekl.ttoll`，编辑器↔`editor.rhai`+`editor.ttoll`；
-  `0x00` 全局等同（退出），其余各自从 0x01 起。
+  和弦（`CTRL+x`/`ALT+x`）的 x 也必须是文法键——`CTRL+SPACE`、`ALT+LEFT` 合法，`CTRL+C`/`CTRL+S`
+  （字符级和弦）**非法**：`tokenize_rule` 直接拒绝，`is_known_key`/`crossterm_to_chord` 不产生候选。
+  Ctrl+C（退出）、Ctrl+S（保存）等系统级快捷由**输入层硬编码**（布局 TUI `app.rs::handle_event`，
+  编辑器 `editor.rs` Ctrl+C 强退），不经 ttoll。
+  改文法 = 破坏性变更，须同步 behavior.rs 与全部 `.ttoll` 及测试。`ebnf/` 下 `.ebnf` 与
+  `.ebnf.txt` 双份须同步。
+- **输入层打字不经 ttoll**：编辑器 Insert 模式、布局 TUI 的 Edit/Popup 模式的字符/退格/Tab 直接
+  内部处理；只有 crossterm 事件归一化出的键名（K∪D，及 CTRL+/ALT+ 且尾键属文法的和弦）走 dispatch。
 - **round-trip 契约**：keys.rs 序列化结果必须被自身解析器还原一致——动它必跑测试。
-- **记录-回放**：Rhai 宿主调用不直接碰 UI 状态，只产生 `HostOp`，由消费者回放；
-  脚本无副作用、可单测。
+
+## 测试
+
+```bash
+cargo test        # 见上方「真实性注意」——当前需先补 Arc import
+```
+
+解析器、dispatch、ID 注册池、Rhai 脚本均有纯数据测试；布局 TUI 与行为编辑器的交互
+（ratatui raw mode）靠实机验证。
 
 ## 提交规范
 
