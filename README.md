@@ -123,14 +123,15 @@ tekl reload <file> [--no-reload]  # 编译 .tekl → termux.properties → termu
 | `A.B` | 弹出键（A 为主键，B 为弹出内容），可 `A.B:Label` |
 | `;` | 键盘行分隔符 |
 
-示例（仓库 `keys.layout`）：
+示例（仓库 `keys.layout`，实体键盘映射 + 倒 T 方向键）：
 
 ```text
-ESC.DRAWER "["."{" "]"."}" "\\"."|" UP.HOME "="."+" KEYBOARD.CTRL(d);
-TAB."~" Ctrl Alt Left."<" Down.End Right.">" Enter.Paste;
+ESC.DRAWER "`"."~" "["."{" "]"."}" APOSTROPHE.QUOTE UP.HOME "="."+" KEYBOARD;
+TAB."^" CTRL ALT BACKSLASH."|" LEFT."<" DOWN.END RIGHT.">" ENTER.PASTE;
 ```
 
-> 真实际子：字面串里的反斜杠要转义为 `"\\"`（上例为 `\` 与 `|` 键）。
+> 字面串不做转义：`"\\"` 会被解析成两个反斜杠。反斜杠、双引号、单引号请用命名键
+> `BACKSLASH`、`QUOTE`、`APOSTROPHE`。
 
 ## ttoll：行为规则语言
 

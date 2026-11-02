@@ -1,10 +1,16 @@
-# Termux Extra Key Language example
+# Termux Extra Key Language 默认布局
 # EBNF: tekl.ebnf
-#   A            plain key            -> "ESC"
-#   A:B          rename label         -> {key, display: B}
-#   A(B)         combo (nested ok)    -> {macro: "A B", display: "A B"}
-#   A(B):Label   combo renamed        -> {macro: "A B", display: Label}
-#   A.B          popup (A any atom)   -> {key: A, popup: B} / {macro: ..., popup: B}
-#   ;            keyboard row separator, \n is just a code newline
-ESC.DRAWER "["."{" "]"."}" "\\"."|" UP.HOME "="."+" KEYBOARD.CTRL(d);
-TAB."~" Ctrl Alt Left."<" Down.End Right.">" Enter.Paste;
+#   A            普通键              -> "ESC"
+#   A:B          改名标签            -> {key, display: B}
+#   A(B)         组合键（可嵌套）     -> {macro: "A B", display: "A B"}
+#   A(B):Label   组合键改名
+#   A.B          弹出键（仅一级）     -> {key: A, popup: B}
+#   ;            行分隔符，换行只是代码格式
+#
+# 设计约束：
+#   1. 上档配对：` ~   [ {   ] }   \ |   ' "   = +
+#   2. 符号按实体左右次序：` [ ] \ '（例外：= 置于 ↑ 右侧）
+#   3. 倒 T 方向键靠右：↑ 正压 ↓，← ↓ → 同排
+#   4. 终端主操作：⌨ 正压 ↲，ESC 居左上角
+ESC.DRAWER "`"."~" "["."{" "]"."}" APOSTROPHE.QUOTE UP.HOME "="."+" KEYBOARD;
+TAB."^" CTRL ALT BACKSLASH."|" LEFT."<" DOWN.END RIGHT.">" ENTER.PASTE;
