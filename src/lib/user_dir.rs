@@ -7,6 +7,7 @@
 //!   ~/.termux/id/<ID>.rhai      用户 ID 插件 (出厂为空) ┘
 //!
 //! 仓库内 termux.tekl / behavior.base 是"出厂模板"，首次运行时复制到主目录。
+//! 发布版把模板放在可执行文件同目录（或 `$PREFIX/share/tekl/`），见 `bundled_asset`。
 
 use std::fs;
 use std::path::PathBuf;
@@ -30,12 +31,43 @@ pub fn id_dir() -> PathBuf {
     user_root().join("id")
 }
 
+/// 出厂资源查找顺序：
+/// 1. `$TEKL_ASSET_DIR`（显式覆盖）
+/// 2. 可执行文件同目录（Release 包解压即用）
+/// 3. `../share/tekl/`（`$PREFIX/bin/tekl` → `$PREFIX/share/tekl/`）
+/// 4. 编译期源码目录（开发期 `cargo run` / `cargo build`）
+fn bundled_asset(name: &str) -> PathBuf {
+    if let Some(dir) = std::env::var_os("TEKL_ASSET_DIR") {
+        let candidate = PathBuf::from(dir).join(name);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            let beside = bin_dir.join(name);
+            if beside.exists() {
+                return beside;
+            }
+            if let Some(prefix) = bin_dir.parent() {
+                let shared = prefix.join("share").join("tekl").join(name);
+                if shared.exists() {
+                    return shared;
+                }
+            }
+        }
+    }
+
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name)
+}
+
 fn bundled_behavior() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("behavior.base")
+    bundled_asset("behavior.base")
 }
 
 fn bundled_layout() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("termux.tekl")
+    bundled_asset("termux.tekl")
 }
 
 pub fn behavior_base_content() -> String {
@@ -102,5 +134,15 @@ mod tests {
     fn test_id_dir_path() {
         let d = id_dir();
         assert!(d.to_string_lossy().ends_with("id"));
+    }
+
+    #[test]
+    fn test_bundled_layout_name() {
+        assert!(bundled_layout().to_string_lossy().ends_with("termux.tekl"));
+    }
+
+    #[test]
+    fn test_bundled_behavior_name() {
+        assert!(bundled_behavior().to_string_lossy().ends_with("behavior.base"));
     }
 }

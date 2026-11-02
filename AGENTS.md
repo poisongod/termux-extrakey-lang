@@ -19,7 +19,8 @@ tekl — Termux 键盘布局 DSL + TUI 工具链。**Rust Core + Rhai ID 插件*
 - `src/worker/script_runtime.rs` — Rhai 引擎封装 `ScriptHost{engine, lib}`；消费者把状态包进
   `Arc<Mutex<S>>`，在 `tui_engine`/`ed_engine` 用 `register_fn` 注册读写原语（捕获句柄）
 - `src/compiler/generator.rs` + `src/termux/writer.rs` — reload 的编译与原子写盘
-- 数据模板：`termux.tekl`（布局样例）、`behavior.base`（**内容即 tekl.ttoll 规则**，首次运行复制到主目录）
+- 数据模板：`termux.tekl`（布局样例）、`behavior.base`（**内容即 tekl.ttoll 规则**，首次运行复制到主目录）。
+  发布包把模板放在二进制同目录，运行时按 `bundled_asset()` 的顺序查找
 
 ## 命令
 

@@ -56,6 +56,18 @@ cp target/release/tekl $PREFIX/bin/tekl        # 通常即上面的 /data/data/.
 > release 配置了 LTO + opt-level z，构建较慢；开发期用
 > `cargo build`（debug）后拷贝同一路径即可。
 
+打包 Release 资产（二进制与出厂模板同包发放）：
+
+```bash
+scripts/package-release.sh aarch64    # → release/tekl-aarch64.tar.gz
+scripts/package-release.sh armv7      # → release/tekl-armv7.tar.gz
+gh release upload v0.4.0 release/tekl-aarch64.tar.gz --clobber
+```
+
+包内 `tekl-<arch>` 与 `termux.tekl` 同级。程序查找出厂模板的顺序是：
+`$TEKL_ASSET_DIR` → 可执行文件同目录 → `$PREFIX/share/tekl/` → 编译期源码目录，
+所以解压后直接运行即可完成首次初始化。
+
 ## 快速开始
 
 三个入口命令（子命令的 `<file>` 为必填；不带子命令即进入布局 TUI）：
