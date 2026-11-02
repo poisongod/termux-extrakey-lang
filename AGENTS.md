@@ -37,13 +37,14 @@ tekl                          # 布局 TUI，编辑 ~/.termux/termux.tekl（缺�
 tekl edit <file>              # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错退出
 tekl reload <file> [--no-reload]
                               # 编译 .tekl → termux.properties（原子写+读回校验）→ termux-reload-settings
+git tag vX.Y.Z && git push origin vX.Y.Z
+                              # 触发 Release：NDK 交叉编译 aarch64/armv7 → 打包 → 发布
 ```
 
 ## ⚠️ 真实性注意（与文档/直觉不符处）
 
-- **`cargo test` 当前编译失败**：`src/worker/script_runtime.rs` 的 tests 缺
-  `use std::sync::Arc;`（bin test 目标 5 个 E0425/E0433）。无 [lib] target，全部测试在 bin crate 内，
-  修掉该 import 后才能跑测试。`cargo build` 正常。
+以前版本在这节记录的「`cargo test` 缺 `use std::sync::Arc;`」已在 `src/worker/script_runtime.rs`
+的 tests 模块补上；若再动测试模块注意保留该 import。
 - **行为规则文件缺省即空表**：TUI 读 `~/.termux/tekl.ttoll`、编辑器读 `~/.termux/editor.ttoll`，
   仓库都不带这两个文件。`provision_user_dir` 只创建 `~/.termux/ui/init.ttoll`（来自 `behavior.base`）
   与 `~/.termux/termux.tekl`（来自 `termux.tekl`）。规则文件缺失时 dispatch 表为空，所有按键无效——

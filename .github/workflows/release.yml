@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target: aarch64-linux-android
+          - arch: armv7
+            target: armv7-linux-androideabi
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27b
+          add-to-path: false
+
+      - name: Build (NDK, API 24)
+        env:
+          NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+
+          export CC_aarch64_linux_android="$TC/bin/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$TC/bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/bin/aarch64-linux-android24-clang"
+
+          export CC_armv7_linux_androideabi="$TC/bin/armv7a-linux-androideabi24-clang"
+          export AR_armv7_linux_androideabi="$TC/bin/llvm-ar"
+          export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$TC/bin/armv7a-linux-androideabi24-clang"
+
+          cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Package (binary + termux.tekl + README)
+        run: bash scripts/package-release.sh ${{ matrix.arch }} "target/${{ matrix.target }}/release/tekl"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tekl-${{ matrix.arch }}
+          path: release/tekl-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -l dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: tekl ${{ github.ref_name }}
+          files: dist/*.tar.gz
+          generate_release_notes: true
+          fail_on_unmatched_files: true

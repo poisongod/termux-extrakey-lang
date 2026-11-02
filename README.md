@@ -68,6 +68,25 @@ gh release upload v0.4.0 release/tekl-aarch64.tar.gz --clobber
 `$TEKL_ASSET_DIR` → 可执行文件同目录 → `$PREFIX/share/tekl/` → 编译期源码目录，
 所以解压后直接运行即可完成首次初始化。
 
+> 脚本 shebang 是 Termux 绝对路径；在非 Termux 环境用 `bash scripts/package-release.sh …`。
+
+## CI/CD
+
+| 工作流 | 触发 | 内容 |
+|---|---|---|
+| `.github/workflows/ci.yml` | `main` 推送 / PR | `cargo build --release --locked` + `cargo test --locked` |
+| `.github/workflows/release.yml` | 推送 `v*` 标签 | Android NDK 交叉编译 aarch64 / armv7 → 打包 → 发布 Release |
+
+发版只需打标签：
+
+```bash
+git tag v0.4.0
+git push origin v0.4.0
+```
+
+资产为 `tekl-aarch64.tar.gz` / `tekl-armv7.tar.gz`，包内是 `tekl-<arch>` +
+`termux.tekl` + `README.md`。CI 用 NDK r27b、API 24（Termux 最低支持 Android 7）。
+
 ## 快速开始
 
 三个入口命令（子命令的 `<file>` 为必填；不带子命令即进入布局 TUI）：
