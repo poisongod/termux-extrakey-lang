@@ -416,7 +416,7 @@ tekl/
 │   ├── tekl.ebnf
 │   └── ttoll.ebnf
 │
-├── keys.layout                             # 布局源码示例
+├── termux.tekl                             # 布局源码示例
 ├── Cargo.toml
 ├── Cargo.lock
 ├── README.md

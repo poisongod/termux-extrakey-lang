@@ -12,7 +12,7 @@
 ```
         .tekl 源码                 ttoll 规则                ID 插件
  ┌──────────────────┐     ┌────────────────────┐    ┌──────────────────┐
- │ keys.layout 语法  │     │ 按键 → 行为 ID 接线 │    │ 每个 ID 一个 .rhai│
+ │ termux.tekl 语法  │     │ 按键 → 行为 ID 接线 │    │ 每个 ID 一个 .rhai│
  │ ESC; TAB "~"; …  │     │ 0x01,UP>0x10 …     │    │ #{run: || …}      │
  └──────────────────┘     └────────────────────┘    └──────────────────┘
         │                          │                         │
@@ -123,7 +123,7 @@ tekl reload <file> [--no-reload]  # 编译 .tekl → termux.properties → termu
 | `A.B` | 弹出键（A 为主键，B 为弹出内容），可 `A.B:Label` |
 | `;` | 键盘行分隔符 |
 
-示例（仓库 `keys.layout`，实体键盘映射 + 倒 T 方向键）：
+示例（仓库 `termux.tekl`，实体键盘映射 + 倒 T 方向键）：
 
 ```text
 ESC.DRAWER "`"."~" "["."{" "]"."}" APOSTROPHE.QUOTE UP.HOME "="."+" KEYBOARD;
@@ -275,7 +275,7 @@ ttoll 编辑器（0x00–0x17 共 24 个）：
 
 | 路径 | 内容 |
 |---|---|
-| `~/.termux/termux.tekl` | 键盘布局源码（首次运行从 `keys.layout` 复制） |
+| `~/.termux/termux.tekl` | 键盘布局源码（首次运行从 `termux.tekl` 复制） |
 | `~/.termux/tekl.ttoll` | 布局 TUI 行为规则（仓库不带，由开发者放置） |
 | `~/.termux/editor.ttoll` | 编辑器行为规则（同左，仓库 `editor.ttoll` 为模板） |
 | `~/.termux/ui/init.ttoll` | 布局 TUI 规则（首次运行从 `behavior.base` 复制） |

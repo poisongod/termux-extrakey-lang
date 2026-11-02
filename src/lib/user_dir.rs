@@ -6,7 +6,7 @@
 //!   ~/.termux/editor.ttoll      编辑器行为规则       ├ 插件开发者层
 //!   ~/.termux/id/<ID>.rhai      用户 ID 插件 (出厂为空) ┘
 //!
-//! 仓库内 keys.layout / behavior.base 是"出厂模板"，首次运行时复制到主目录。
+//! 仓库内 termux.tekl / behavior.base 是"出厂模板"，首次运行时复制到主目录。
 
 use std::fs;
 use std::path::PathBuf;
@@ -35,7 +35,7 @@ fn bundled_behavior() -> PathBuf {
 }
 
 fn bundled_layout() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("keys.layout")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("termux.tekl")
 }
 
 pub fn behavior_base_content() -> String {

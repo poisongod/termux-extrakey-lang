@@ -19,7 +19,7 @@ tekl — Termux 键盘布局 DSL + TUI 工具链。**Rust Core + Rhai ID 插件*
 - `src/worker/script_runtime.rs` — Rhai 引擎封装 `ScriptHost{engine, lib}`；消费者把状态包进
   `Arc<Mutex<S>>`，在 `tui_engine`/`ed_engine` 用 `register_fn` 注册读写原语（捕获句柄）
 - `src/compiler/generator.rs` + `src/termux/writer.rs` — reload 的编译与原子写盘
-- 数据模板：`keys.layout`（布局样例）、`behavior.base`（**内容即 tekl.ttoll 规则**，首次运行复制到主目录）
+- 数据模板：`termux.tekl`（布局样例）、`behavior.base`（**内容即 tekl.ttoll 规则**，首次运行复制到主目录）
 
 ## 命令
 
@@ -45,7 +45,7 @@ tekl reload <file> [--no-reload]
   修掉该 import 后才能跑测试。`cargo build` 正常。
 - **行为规则文件缺省即空表**：TUI 读 `~/.termux/tekl.ttoll`、编辑器读 `~/.termux/editor.ttoll`，
   仓库都不带这两个文件。`provision_user_dir` 只创建 `~/.termux/ui/init.ttoll`（来自 `behavior.base`）
-  与 `~/.termux/termux.tekl`（来自 `keys.layout`）。规则文件缺失时 dispatch 表为空，所有按键无效——
+  与 `~/.termux/termux.tekl`（来自 `termux.tekl`）。规则文件缺失时 dispatch 表为空，所有按键无效——
   要跑起来须先手动放入（`behavior.base` 内容即 tekl.ttoll 规则）。
 - **模式号两套语义**：`0x01/0x02/0x03` 在布局 TUI 是 Normal/Edit/Popup（`Mode` in app.rs），
   在 ttoll 编辑器是 Normal/Insert/Command（`Mode` in editor.rs），互不共享。
