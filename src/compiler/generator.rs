@@ -1,6 +1,9 @@
 use crate::lib;
 
-/// Compile a tekl source file to extra-keys JSON and write to termux.properties.
+/// Compile a tekl source file and write the layout to the `extra-keys` property.
+///
+/// The value written is tekl text (single line, rows separated by `;`), not JSON. The Termux app
+/// parses it natively.
 pub fn run_compile(
     file: &Option<String>,
     output: &Option<String>,
@@ -16,12 +19,13 @@ pub fn run_compile(
         eprintln!("warning: {w}");
     }
 
-    let json_str = lib::keys::stringify_json_rows(&result.json);
+    // 一行的 tekl 文本，行之间用 `;` 分隔；换行只用于源码可读性。
+    let tekl = lib::keys::print_rows(&result.rows).replace('\n', " ");
 
     // Write to termux.properties
     let props_path = resolve_properties_path(output)?;
-    crate::termux::writer::write_properties(&props_path, &json_str)?;
-    eprintln!("wrote extra-keys to {}", props_path.display());
+    crate::termux::writer::write_properties(&props_path, &tekl)?;
+    eprintln!("wrote extra-keys (tekl) to {}", props_path.display());
 
     if reload {
         crate::termux::reload::reload_settings()?;

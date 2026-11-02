@@ -36,7 +36,7 @@ cp target/release/tekl $PREFIX/bin/tekl                 # Termux 安装
 tekl                          # 布局 TUI，编辑 ~/.termux/termux.tekl（首次运行自动生成）
 tekl edit <file>              # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错退出
 tekl reload <file> [--no-reload]
-                              # 编译 .tekl → termux.properties（原子写+读回校验）→ termux-reload-settings
+                              # 编译 .tekl → termux.properties 的 extra-keys（tekl 文本，非 JSON）→ termux-reload-settings
 git tag vX.Y.Z && git push origin vX.Y.Z
                               # 触发 Release：NDK 交叉编译 aarch64/armv7 → 打包 → 发布
 ```

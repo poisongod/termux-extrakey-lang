@@ -3,11 +3,19 @@ use std::path::Path;
 
 const EXTRA_KEYS_PREFIX: &str = "extra-keys = ";
 
-/// Atomically write extra-keys JSON to termux.properties.
+/// 转义 `java.util.Properties` 值。
+///
+/// Termux 用 `java.util.Properties` 读取 `termux.properties`，反斜杠是转义字符，
+/// 所以 tekl 文本里的每个 `\` 都要写成 `\\`，否则字面反斜杠会被吞掉。
+pub fn escape_value(value: &str) -> String {
+    value.replace('\\', "\\\\")
+}
+
+/// Atomically write tekl source to the `extra-keys` property of termux.properties.
 ///
 /// Strategy: read existing file, replace or append `extra-keys = ...` line,
 /// write to temp file, rename for crash safety.
-pub fn write_properties(path: &Path, json: &str) -> anyhow::Result<()> {
+pub fn write_properties(path: &Path, tekl: &str) -> anyhow::Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
 
@@ -17,7 +25,8 @@ pub fn write_properties(path: &Path, json: &str) -> anyhow::Result<()> {
         String::new()
     };
 
-    let new_line = format!("{EXTRA_KEYS_PREFIX}{json}");
+    let escaped = escape_value(tekl);
+    let new_line = format!("{EXTRA_KEYS_PREFIX}{escaped}");
 
     let mut lines: Vec<String> = content.lines().map(String::from).collect();
     let replaced = lines.iter_mut().any(|line| {
@@ -48,7 +57,7 @@ pub fn write_properties(path: &Path, json: &str) -> anyhow::Result<()> {
 
     // Verify read-back
     let read_back = fs::read_to_string(path)?;
-    if !read_back.contains(json) {
+    if !read_back.contains(&escaped) {
         // Restore from backup
         if bak_path.exists() {
             fs::copy(&bak_path, path)?;
@@ -57,4 +66,16 @@ pub fn write_properties(path: &Path, json: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_backslash_for_properties() {
+        assert_eq!(escape_value("ESC"), "ESC");
+        assert_eq!(escape_value(r#"BACKSLASH."|""#), r#"BACKSLASH."|""#);
+        assert_eq!(escape_value(r#""\""#), r#""\\""#);
+    }
 }

@@ -20,7 +20,7 @@
    keys 编译器               dispatch 表                Rhai 引擎 (微内核 API)
         │                                                    │
         v                                                    v
-  extra-keys JSON      ┌───────────────────────────────────────┐
+  extra-keys (tekl)   ┌───────────────────────────────────────┐
         │              │  Arc<Mutex<App>> / <EditorState> 状态 │
         v              └───────────────────────────────────────┘
   termux.properties
@@ -320,12 +320,14 @@ ttoll 编辑器（0x00–0x17 共 24 个）：
 
 `tekl reload <file>`（`src/compiler/generator.rs` + `src/termux/`）：
 
-1. **编译**：读取 `.tekl` → `keys::compile_source` 得 `extra-keys` JSON 行（含警告）。
-2. **原子写盘**：替换/追加 `~/.termux/termux.properties` 中 `extra-keys = ...` 行；
+1. **编译**：读取 `.tekl` → `keys::compile_source` 得 AST 与警告。
+2. **序列化**：`print_rows` 还原成规范 tekl 文本，压成一行（`;` 分行），
+   按 `java.util.Properties` 规则转义反斜杠后写入 `extra-keys = ...`。
+3. **原子写盘**：替换/追加 `~/.termux/termux.properties` 中 `extra-keys = ...` 行；
    先写临时文件再 rename，写前备份 `*.tekl.bak`，写后读回校验。
-3. **生效**：调用 `termux-reload-settings`；失败仅告警不致命（文件已写入）。
+4. **生效**：调用 `termux-reload-settings`；失败仅告警不致命（文件已写入）。
 
-`--no-reload` 跳过第 3 步。
+`--no-reload` 跳过第 4 步。
 
 ## 架构与契约
 
