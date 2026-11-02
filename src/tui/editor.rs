@@ -330,7 +330,7 @@ fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> Scrip
 fn resolve_path(file: &Option<String>) -> std::path::PathBuf {
     match file {
         Some(f) => std::path::PathBuf::from(f),
-        None => user_dir::behavior_base_file(),
+        None => user_dir::tui_rules_file(),
     }
 }
 

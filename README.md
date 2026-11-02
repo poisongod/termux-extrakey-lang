@@ -64,9 +64,9 @@ scripts/package-release.sh armv7      # → release/tekl-armv7.tar.gz
 gh release upload v0.4.0 release/tekl-aarch64.tar.gz --clobber
 ```
 
-包内 `tekl-<arch>` 与 `termux.tekl` 同级。程序查找出厂模板的顺序是：
+包内 `tekl-<arch>` 与三个模板（`termux.tekl` / `tekl.ttoll` / `editor.ttoll`）同级。程序查找出厂模板的顺序是：
 `$TEKL_ASSET_DIR` → 可执行文件同目录 → `$PREFIX/share/tekl/` → 编译期源码目录，
-所以解压后直接运行即可完成首次初始化。
+所以解压后直接运行即可完成首次初始化（布局与两套按键接线一并落地）。
 
 > 脚本 shebang 是 Termux 绝对路径；在非 Termux 环境用 `bash scripts/package-release.sh …`。
 
@@ -92,7 +92,7 @@ git push origin v0.4.0
 三个入口命令（子命令的 `<file>` 为必填；不带子命令即进入布局 TUI）：
 
 ```bash
-tekl                              # 布局 TUI，编辑 ~/.termux/termux.tekl（缺失则空布局）
+tekl                              # 布局 TUI，编辑 ~/.termux/termux.tekl（首次运行自动生成）
 tekl edit <file>                  # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错
 tekl reload <file> [--no-reload]  # 编译 .tekl → termux.properties → termux-reload-settings
 ```
@@ -205,8 +205,7 @@ CTRL+SPACE>0x40      # 和弦可作全局规则（无模式前缀时任意模式
 
 ### 默认接线
 
-布局 TUI 规则模板 `behavior.base`（内容即 `tekl.ttoll` 规则，首次运行复制至
-`~/.termux/ui/init.ttoll`）：
+布局 TUI 规则模板 `tekl.ttoll`（首次运行复制至 `~/.termux/tekl.ttoll`）：
 
 ```text
 0x01,ESC>0x00        # 退出
@@ -307,15 +306,12 @@ ttoll 编辑器（0x00–0x17 共 24 个）：
 | 路径 | 内容 |
 |---|---|
 | `~/.termux/termux.tekl` | 键盘布局源码（首次运行从 `termux.tekl` 复制） |
-| `~/.termux/tekl.ttoll` | 布局 TUI 行为规则（仓库不带，由开发者放置） |
-| `~/.termux/editor.ttoll` | 编辑器行为规则（同左，仓库 `editor.ttoll` 为模板） |
-| `~/.termux/ui/init.ttoll` | 布局 TUI 规则（首次运行从 `behavior.base` 复制） |
+| `~/.termux/tekl.ttoll` | 布局 TUI 行为规则（首次运行从 `tekl.ttoll` 复制） |
+| `~/.termux/editor.ttoll` | 编辑器行为规则（首次运行从 `editor.ttoll` 复制） |
 | `~/.termux/id/` | 用户 ID 插件目录 |
 
-> **注意**：`tekl.ttoll` / `editor.ttoll` 默认不存在。规则文件缺失时 dispatch 表为空，
-> 所有按键无效。首次运行 `provision_user_dir` 只创建 `termux.tekl` 与
-> `ui/init.ttoll`。要跑起来须先放置规则文件 —— `behavior.base` 内容即
-> `tekl.ttoll` 规则（亦可直接 `cp behavior.base ~/.termux/tekl.ttoll`）。
+> **注意**：三个模板都在 Release 包内、与二进制同级，首次运行时由 `provision_user_dir()`
+> 复制到 `~/.termux/`，已存在的文件不覆盖。规则文件缺失时 dispatch 表为空，所有按键无效。
 >
 > 也是因为这一点，`Cargo.toml` 无 `[lib]` target —— 全部代码是 bin crate 内的
 > `mod`，`cargo test` 直接在二进制目标上跑。

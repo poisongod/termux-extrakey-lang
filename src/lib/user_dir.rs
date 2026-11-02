@@ -2,12 +2,13 @@
 //!
 //! 布局:
 //!   ~/.termux/termux.tekl       键盘布局源码 (普通用户)
-//!   ~/.termux/tekl.ttoll        布局 TUI 行为规则   ┐
-//!   ~/.termux/editor.ttoll      编辑器行为规则       ├ 插件开发者层
+//!   ~/.termux/tekl.ttoll        布局 TUI 行为规则     ┐
+//!   ~/.termux/editor.ttoll      编辑器行为规则         ├ 插件开发者层
 //!   ~/.termux/id/<ID>.rhai      用户 ID 插件 (出厂为空) ┘
 //!
-//! 仓库内 termux.tekl / behavior.base 是"出厂模板"，首次运行时复制到主目录。
-//! 发布版把模板放在可执行文件同目录（或 `$PREFIX/share/tekl/`），见 `bundled_asset`。
+//! 仓库内 termux.tekl / tekl.ttoll / editor.ttoll 是"出厂模板"，首次运行时复制到主目录，
+//! 目录与文件名与运行时读取路径一一对应。发布版把模板放在可执行文件同目录
+//! （或 `$PREFIX/share/tekl/`），见 `bundled_asset`。
 
 use std::fs;
 use std::path::PathBuf;
@@ -22,8 +23,14 @@ pub fn default_layout_file() -> PathBuf {
     user_root().join("termux.tekl")
 }
 
-pub fn behavior_base_file() -> PathBuf {
-    user_root().join("ui").join("init.ttoll")
+/// 布局 TUI 的按键接线表（`app.rs` 启动时读取）。
+pub fn tui_rules_file() -> PathBuf {
+    user_root().join("tekl.ttoll")
+}
+
+/// ttoll 编辑器的按键接线表（`editor.rs` 启动时读取）。
+pub fn editor_rules_file() -> PathBuf {
+    user_root().join("editor.ttoll")
 }
 
 /// 用户 ID 插件目录 (~/.termux/id/)，文件名即 ID: <0xHH>.rhai
@@ -62,46 +69,35 @@ fn bundled_asset(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-fn bundled_behavior() -> PathBuf {
-    bundled_asset("behavior.base")
-}
-
 fn bundled_layout() -> PathBuf {
     bundled_asset("termux.tekl")
 }
 
-pub fn behavior_base_content() -> String {
-    let f = behavior_base_file();
-    if f.exists() {
-        fs::read_to_string(&f).unwrap_or_default()
-    } else {
-        let bundled = bundled_behavior();
-        fs::read_to_string(&bundled).unwrap_or_default()
-    }
+fn bundled_tui_rules() -> PathBuf {
+    bundled_asset("tekl.ttoll")
 }
 
-/// 首次运行: 补齐主目录模板。返回新建的文件列表。
+fn bundled_editor_rules() -> PathBuf {
+    bundled_asset("editor.ttoll")
+}
+
+/// 首次运行: 补齐主目录模板。已存在的一概不覆盖。返回新建的文件列表。
 pub fn provision_user_dir() -> Vec<PathBuf> {
     let mut created = Vec::new();
 
-    let _ = fs::create_dir_all(user_root().join("ui"));
+    let _ = fs::create_dir_all(user_root());
     let _ = fs::create_dir_all(id_dir());
 
-    let behavior_file = behavior_base_file();
-    if !behavior_file.exists() {
-        let bundled = bundled_behavior();
-        if bundled.exists() {
-            let _ = fs::copy(&bundled, &behavior_file);
-            created.push(behavior_file);
-        }
-    }
+    // (目标路径, 出厂模板) — 目标名与运行时读取路径一致，避免"复制了却没人读"
+    let templates = [
+        (default_layout_file(), bundled_layout()),
+        (tui_rules_file(), bundled_tui_rules()),
+        (editor_rules_file(), bundled_editor_rules()),
+    ];
 
-    let layout_file = default_layout_file();
-    if !layout_file.exists() {
-        let bundled = bundled_layout();
-        if bundled.exists() {
-            let _ = fs::copy(&bundled, &layout_file);
-            created.push(layout_file);
+    for (dest, bundled) in templates {
+        if !dest.exists() && bundled.exists() && fs::copy(&bundled, &dest).is_ok() {
+            created.push(dest);
         }
     }
 
@@ -125,9 +121,16 @@ mod tests {
     }
 
     #[test]
-    fn test_behavior_base_file_path() {
-        let f = behavior_base_file();
-        assert!(f.to_string_lossy().ends_with("init.ttoll"));
+    fn test_tui_rules_file_path() {
+        let f = tui_rules_file();
+        assert!(f.to_string_lossy().ends_with("tekl.ttoll"));
+        assert!(!f.to_string_lossy().contains("/ui/"));
+    }
+
+    #[test]
+    fn test_editor_rules_file_path() {
+        let f = editor_rules_file();
+        assert!(f.to_string_lossy().ends_with("editor.ttoll"));
     }
 
     #[test]
@@ -142,7 +145,12 @@ mod tests {
     }
 
     #[test]
-    fn test_bundled_behavior_name() {
-        assert!(bundled_behavior().to_string_lossy().ends_with("behavior.base"));
+    fn test_bundled_tui_rules_name() {
+        assert!(bundled_tui_rules().to_string_lossy().ends_with("tekl.ttoll"));
+    }
+
+    #[test]
+    fn test_bundled_editor_rules_name() {
+        assert!(bundled_editor_rules().to_string_lossy().ends_with("editor.ttoll"));
     }
 }

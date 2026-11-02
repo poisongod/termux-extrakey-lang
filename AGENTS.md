@@ -19,8 +19,8 @@ tekl — Termux 键盘布局 DSL + TUI 工具链。**Rust Core + Rhai ID 插件*
 - `src/worker/script_runtime.rs` — Rhai 引擎封装 `ScriptHost{engine, lib}`；消费者把状态包进
   `Arc<Mutex<S>>`，在 `tui_engine`/`ed_engine` 用 `register_fn` 注册读写原语（捕获句柄）
 - `src/compiler/generator.rs` + `src/termux/writer.rs` — reload 的编译与原子写盘
-- 数据模板：`termux.tekl`（布局样例）、`behavior.base`（**内容即 tekl.ttoll 规则**，首次运行复制到主目录）。
-  发布包把模板放在二进制同目录，运行时按 `bundled_asset()` 的顺序查找
+- 数据模板：`termux.tekl`（布局样例）、`tekl.ttoll` / `editor.ttoll`（**内容即 `~/.termux/` 下同名规则**，
+  首次运行复制到主目录）。发布包把三个模板放在二进制同目录，运行时按 `bundled_asset()` 的顺序查找
 
 ## 命令
 
@@ -33,7 +33,7 @@ cp target/release/tekl $PREFIX/bin/tekl                 # Termux 安装
 运行：
 
 ```bash
-tekl                          # 布局 TUI，编辑 ~/.termux/termux.tekl（缺失则空布局）
+tekl                          # 布局 TUI，编辑 ~/.termux/termux.tekl（首次运行自动生成）
 tekl edit <file>              # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错退出
 tekl reload <file> [--no-reload]
                               # 编译 .tekl → termux.properties（原子写+读回校验）→ termux-reload-settings
@@ -45,10 +45,10 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 
 以前版本在这节记录的「`cargo test` 缺 `use std::sync::Arc;`」已在 `src/worker/script_runtime.rs`
 的 tests 模块补上；若再动测试模块注意保留该 import。
-- **行为规则文件缺省即空表**：TUI 读 `~/.termux/tekl.ttoll`、编辑器读 `~/.termux/editor.ttoll`，
-  仓库都不带这两个文件。`main` 在 TUI 路径启动时调用 `provision_user_dir()`，只创建
-  `~/.termux/ui/init.ttoll`（来自 `behavior.base`）与 `~/.termux/termux.tekl`（来自 `termux.tekl`）。规则文件缺失时 dispatch 表为空，所有按键无效——
-  要跑起来须先手动放入（`behavior.base` 内容即 tekl.ttoll 规则）。
+- **规则文件由 provision 落地**：TUI 读 `~/.termux/tekl.ttoll`、编辑器读 `~/.termux/editor.ttoll`，
+  `main` 在 TUI 路径启动时调用 `provision_user_dir()`，从二进制同目录（或源码目录）的
+  `tekl.ttoll` / `editor.ttoll` / `termux.tekl` 复制，目标名与读取路径一一对应，已存在不覆盖。
+  三份模板都随 Release 打包；规则文件缺失时 dispatch 表为空，所有按键无效。
 - **模式号两套语义**：`0x01/0x02/0x03` 在布局 TUI 是 Normal/Edit/Popup（`Mode` in app.rs），
   在 ttoll 编辑器是 Normal/Insert/Command（`Mode` in editor.rs），互不共享。
 - `id.txt` 只是人工速查表；ID 的 `desc` 真相源是各 `.rhai` 文件。
@@ -84,7 +84,7 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 ## 测试
 
 ```bash
-cargo test        # 见上方「真实性注意」——当前需先补 Arc import
+cargo test        # 需要 `use std::sync::Arc;`（tests 模块内已引入，勿删）
 ```
 
 解析器、dispatch、ID 注册池、Rhai 脚本均有纯数据测试；布局 TUI 与行为编辑器的交互
