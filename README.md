@@ -6,7 +6,7 @@
 （键盘布局编辑、行为规则编辑），并一键编译回写 `termux.properties` 热部署。
 
 - Rust Core（微内核）+ Rhai ID 插件，GPL-3.0（`LICENSE`）
-- 当前版本 v0.3.0
+- 当前版本 v0.4.0
 - 需求文档：`tekl-PRD.md`；文法：`ebnf/*.ebnf`（另有 `.ebnf.txt` 同文副本）
 
 ```
