@@ -46,8 +46,8 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 以前版本在这节记录的「`cargo test` 缺 `use std::sync::Arc;`」已在 `src/worker/script_runtime.rs`
 的 tests 模块补上；若再动测试模块注意保留该 import。
 - **行为规则文件缺省即空表**：TUI 读 `~/.termux/tekl.ttoll`、编辑器读 `~/.termux/editor.ttoll`，
-  仓库都不带这两个文件。`provision_user_dir` 只创建 `~/.termux/ui/init.ttoll`（来自 `behavior.base`）
-  与 `~/.termux/termux.tekl`（来自 `termux.tekl`）。规则文件缺失时 dispatch 表为空，所有按键无效——
+  仓库都不带这两个文件。`main` 在 TUI 路径启动时调用 `provision_user_dir()`，只创建
+  `~/.termux/ui/init.ttoll`（来自 `behavior.base`）与 `~/.termux/termux.tekl`（来自 `termux.tekl`）。规则文件缺失时 dispatch 表为空，所有按键无效——
   要跑起来须先手动放入（`behavior.base` 内容即 tekl.ttoll 规则）。
 - **模式号两套语义**：`0x01/0x02/0x03` 在布局 TUI 是 Normal/Edit/Popup（`Mode` in app.rs），
   在 ttoll 编辑器是 Normal/Insert/Command（`Mode` in editor.rs），互不共享。

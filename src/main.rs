@@ -34,6 +34,11 @@ enum Commands {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // 首次运行补齐 ~/.termux 模板（Release 包里模板位于可执行文件同目录）
+    if !matches!(&cli.command, Some(Commands::Reload { .. })) {
+        lib::user_dir::provision_user_dir();
+    }
+
     match cli.command {
         None => {
             // Default: launch TUI with default tekl file
