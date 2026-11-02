@@ -609,6 +609,29 @@ mod tests {
     }
 
     #[test]
+    fn repo_tekl_ttoll_conforms_and_targets_registered() {
+        // 仓库根 tekl.ttoll — 布局 TUI 的出厂接线，随 Release 发放。
+        // 每一行都要符合文法，且目标 ID 必须在内置 tui 注册表里，否则首次运行按键无效。
+        let src = include_str!("../../tekl.ttoll");
+        let registry = crate::lib::id::IdRegistry::for_tui();
+        let mut count = 0;
+        for line in src.lines() {
+            let s = line.trim();
+            if s.is_empty() || s.starts_with("(*") {
+                continue;
+            }
+            let rule = tokenize_rule(s).unwrap_or_else(|| panic!("tekl.ttoll 不符合文法: {line}"));
+            assert!(
+                registry.is_registered(&rule.action),
+                "tekl.ttoll 指向未注册的 ID: {} ({line})",
+                rule.action
+            );
+            count += 1;
+        }
+        assert!(count > 0, "tekl.ttoll 不应为空");
+    }
+
+    #[test]
     fn expand_k_nonterminal() {
         let r = tokenize_rule("0x01,K>0x02").unwrap();
         assert_eq!(r.steps[0].keys, hs(["ESC", "ALT", "CTRL", "SPACE", "ENTER"]));
