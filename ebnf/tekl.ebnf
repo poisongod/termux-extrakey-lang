@@ -52,34 +52,12 @@ A = N
   | A '(' A ')'
   | A ':' N
 
-G = 'allow-external-apps' '=' ( 'true' | 'false' )
-  | 'default-working-directory' '=' '"' { [^\n] } '"'
-  | 'disable-terminal-session-change-toast' '=' ( 'true' | 'false' )
-  | 'hide-soft-keyboard-on-startup' '=' ( 'true' | 'false' )
-  | 'soft-keyboard-toggle-behaviour' '=' ( 'enable' | 'disable' )
-  | 'terminal-transcript-rows' '=' [0-9]+
-  | 'volume-keys' '=' ( 'volume' | 'keyboard' | 'off' )
-  | 'fullscreen' '=' ( 'true' | 'false' )
-  | 'use-fullscreen-workaround' '=' ( 'true' | 'false' )
-  | 'terminal-cursor-blink-rate' '=' [0-9]+
-  | 'terminal-cursor-style' '=' ( 'block' | 'bar' | 'underline' )
-  | 'extra-keys-style' '=' ( 'default' | 'arrows-only' | 'arrows-all' | 'all' | 'none' )
-  | 'extra-keys-text-all-caps' '=' ( 'true' | 'false' )
-  | 'use-black-ui' '=' ( 'true' | 'false' )
-  | 'disable-hardware-keyboard-shortcuts' '=' ( 'true' | 'false' )
-  | 'shortcut.create-session' '=' A
-  | 'shortcut.next-session' '=' A
-  | 'shortcut.previous-session' '=' A
-  | 'shortcut.rename-session' '=' A
-  | 'bell-character' '=' ( 'vibrate' | 'beep' | 'ignore' )
-  | 'back-key' '=' ( 'escape' | 'back' )
-  | 'enforce-char-based-input' '=' ( 'true' | 'false' )
-  | 'ctrl-space-workaround' '=' ( 'true' | 'false' )
-  | 'terminal-margin-horizontal' '=' [0-9]+
-  | 'terminal-margin-vertical' '=' [0-9]+
-  | 'use-custom-tabs' '=' ( 'true' | 'false' )
-  | 'custom-tabs' '=' '[' { [^\n] } ']'
-  | 'long-press-delay' '=' [0-9]+
+G = 'height' '=' [0-9]+
+  | 'theme' '=' IDENT
+  | 'layout' '=' IDENT
+  | 'reload'
+
+(* 全局设置由 CLI/TUI 接受并保留；Termux App 只读取 M 矩阵，G 会被忽略。 *)
 
 M = A
   | A '.' A

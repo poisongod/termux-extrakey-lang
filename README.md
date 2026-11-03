@@ -156,6 +156,9 @@ tekl check <file>                 # 只校验语法与警告，不写盘、不 r
 | `A.B` | 弹出键（A 为主键，B 为弹出内容），可 `A.B:Label` |
 | `;` | 键盘行分隔符 |
 
+全局设置（`height = 40`、`theme = dark`、`layout = extra`、`reload`）会被 CLI/TUI 解析并在
+TUI 存盘时保留；Termux App 只读键盘矩阵，会忽略这些行。`tekl reload` 写布局时也会剥离它们。
+
 示例（仓库 `termux.tekl`，实体键盘映射 + 倒 T 方向键）：
 
 ```text

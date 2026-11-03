@@ -56,15 +56,10 @@ S = 'CTRL' | 'ALT' | 'FN' | 'SHIFT'
 
 A = N | S | A '(' A ')' | A ':' N
 
-G = 'allow-external-apps' '=' ( 'true' | 'false' )
-  | 'default-working-directory' '=' '"' { [^\n] } '"'
-  | 'hide-soft-keyboard-on-startup' '=' ( 'true' | 'false' )
-  | 'soft-keyboard-toggle-behaviour' '=' ( 'enable' | 'disable' )
-  | 'terminal-transcript-rows' '=' [0-9]+
-  | 'volume-keys' '=' ( 'volume' | 'keyboard' | 'off' )
-  | 'extra-keys-style' '=' ( 'default' | 'arrows-only' | 'arrows-all' | 'all' | 'none' )
-  | 'extra-keys-text-all-caps' '=' ( 'true' | 'false' )
-  | … （完整清单见 ebnf/tekl.ebnf）
+G = 'height' '=' [0-9]+
+  | 'theme' '=' IDENT
+  | 'layout' '=' IDENT
+  | 'reload'
 
 M = A | A '.' A | M M | M '\n' | M ';\n'
 
@@ -124,10 +119,10 @@ ID 是纯标识符——ttoll 只负责"什么键触发什么 ID"，不关心 ID
 - **统一 Rust**：插件由内嵌 Rhai 引擎（纯 Rust）执行，无外部 Node.js/V8 依赖
 - **一个 ID 必须对应一个操作逻辑**：插件映射中每个 `"0xHH"` 必须携带 `action`
 - **按消费者隔离注册池**：每个消费者只加载自己的 `.rhai` 与 `.ttoll`，无共享 ID 池
-  - 布局 TUI ← `tui.rhai` + `tekl.ttoll`
-  - ttoll 编辑器 ← `editor.rhai` + `editor.ttoll`
+  - 布局 TUI ← `src/id/tui/<ID>.rhai` + `tekl.ttoll`
+  - ttoll 编辑器 ← `src/id/editor/<ID>.rhai` + `editor.ttoll`
 - **内置 + 扩展分层**：
-  - 内置插件位于项目 `src/id/*.rhai`，经 `include_str!` 编译进二进制，开箱即用
+  - 内置插件位于 `src/id/{tui,editor}/<ID>.rhai`，经 `include_str!` 编译进二进制，开箱即用
   - 用户目录 `~/.termux/id/*.rhai` 由开发者自行创建，**只添加新 ID，不覆盖内置条目**
 - **纯标识符**：ID 不进行任何业务映射，语义完全由 action 定义
 
@@ -181,8 +176,8 @@ pub const TUI_IDS: &[(&str, &str)] = &[
 | 范围 | 说明 |
 |---|---|
 | 0x00–0x04 | 系统保留（退出/模式切换/编辑应用） |
-| 0x10–0x5F | 布局 TUI 内置段（tui.rhai 使用） |
-| 0x60–0x7F | ttoll 编辑器内置段（editor.rhai 使用） |
+| 0x10–0x5F | 布局 TUI 内置段（`tui` 插件使用） |
+| 0x60–0x7F | ttoll 编辑器内置段（`editor` 插件使用） |
 | 0x80–0xFF | 插件开发者自由扩展 |
 
 不同消费者的注册池相互隔离，同号在不同消费者中可各自定义。
@@ -241,8 +236,10 @@ IdRegistry.id_action(ID)        ← 仅查本消费者的注册池
 ### 7.1 启动行为
 
 ```bash
-tekl              # 默认启动布局 TUI（普通用户入口）
-tekl <file>       # .tekl → 布局 TUI；.ttoll → ttoll 编辑器（开发者入口）
+tekl                    # 默认启动布局 TUI（普通用户入口）
+tekl edit <file>        # .tekl → 布局 TUI；.ttoll → ttoll 编辑器（开发者入口）
+tekl check <file>       # 只校验，不写盘、不 reload
+tekl reload <file>      # 校验 → 写 ~/.termux/termux.tekl → termux-reload-settings
 ```
 
 ### 7.2 两个消费者
@@ -251,7 +248,7 @@ tekl <file>       # .tekl → 布局 TUI；.ttoll → ttoll 编辑器（开发�
 |---|---|---|
 | 受众 | 普通用户 | 插件开发者 |
 | 编辑对象 | 键盘矩阵（所见即所得） | `.ttoll` 规则文本 |
-| ID 插件 | `tui.rhai` | `editor.rhai` |
+| ID 插件 | `src/id/tui/<ID>.rhai` | `src/id/editor/<ID>.rhai` |
 | 行为规则 | `tekl.ttoll` | `editor.ttoll` |
 | 注册池 | 独立实例 | 独立实例 |
 
@@ -358,63 +355,78 @@ action 求值（Rhai Engine）
 ## 十一、热部署流程
 
 ```
-用户编辑完成（手写保存 / TUI 确认）
+用户编辑完成（手写保存 / TUI 确认 / `tekl reload`）
         ↓
-编译器校验语法（validate_termux_json + validate_extra_key_json）
+keys::compile_source：词法 → 语法 → 组合键/弹窗校验
         ↓
-校验失败 → 返回错误信息，不写入
+校验失败 → 打印行/列，不写入
 校验成功 ↓
         ↓
-分离 G 配置和 M 矩阵
+G 全局设置单独收集并打印“App 不支持、已忽略”警告
         ↓
-生成完整 termux.tekl 内容
+M 矩阵规范化为每行一条 `...;`（G 不写入布局文件）
         ↓
-原子写入 ~/.termux/termux.tekl
+原子写入 ~/.termux/termux.tekl（源文件即目标文件时只校验、不重写）
         ↓
 执行 termux-reload-settings
         ↓
 Termux 键盘更新，完成 < 200ms
 ```
 
+App 端直接解析该文件；Rust CLI 与 Java 解析器共用 `conformance/` 语料，
+保证“`tekl check` 通过 ⇒ App 能加载”。
+
 ## 十二、项目文件结构
 
 ```
 tekl/
 ├── src/
-│   ├── main.rs                             # 入口：子命令分发（默认 TUI）
+│   ├── main.rs                             # 入口：check / reload / edit / 默认 TUI
 │   │
-│   ├── compiler/                           # 编译器
+│   ├── compiler/
 │   │   ├── mod.rs
-│   │   └── jit.rs                          # ttoll JIT（预留：EBNF 驱动解析）
+│   │   └── generator.rs                    # reload/check：编译、原地跳过写盘、--output
 │   │
-│   ├── tui/                                # TUI 层
+│   ├── termux/
 │   │   ├── mod.rs
-│   │   ├── app.rs                          # 布局 TUI（消费 tui.rhai + tekl.ttoll）
-│   │   ├── editor.rs                       # ttoll 编辑器（消费 editor.rhai + editor.ttoll）
-│   │   └── mode.rs                         # 模式管理（0x01/0x02/0x03）
+│   │   ├── writer.rs                       # ~/.termux/termux.tekl 原子写与备份
+│   │   └── reload.rs                       # termux-reload-settings
 │   │
-│   ├── id/                                 # 内置 ID 插件（include_str! 嵌入）
-│   │   ├── tui.rhai                        # 布局 TUI 词汇表
-│   │   └── editor.rhai                     # ttoll 编辑器词汇表
-│   │
-│   ├── worker/                             # 脚本运行时
+│   ├── tui/
 │   │   ├── mod.rs
-│   │   └── script_runtime.rs               # Rhai 引擎 + ActionHost + 宿主函数注册
+│   │   ├── app.rs                          # 布局 TUI（消费 tui 插件 + tekl.ttoll）
+│   │   ├── editor.rs                       # ttoll 编辑器（消费 editor 插件 + editor.ttoll）
+│   │   └── preview.rs                      # 键盘矩阵预览渲染
 │   │
-│   └── lib/                                # 共享库
+│   ├── id/                                 # 内置 ID 插件（include_str! 嵌入，一 ID 一文件）
+│   │   ├── tui/<ID>.rhai                   # 布局 TUI 词汇表（25 个）
+│   │   └── editor/<ID>.rhai                # ttoll 编辑器词汇表（24 个）
+│   │
+│   ├── worker/
+│   │   ├── mod.rs
+│   │   └── script_runtime.rs               # Rhai 引擎封装 + 原语注册
+│   │
+│   └── lib/                                # 共享库（bin crate 内的 mod lib）
 │       ├── mod.rs
 │       ├── keys.rs                         # tekl 解析器/编译器/打印器
 │       ├── keyset.rs                       # 按键词汇表
-│       ├── behavior.rs                     # ttoll 解析/dispatch/check
+│       ├── behavior.rs                     # ttoll 解析/dispatch/静态检查
 │       ├── id.rs                           # IdRegistry（按消费者隔离，加载 .rhai）
-│       ├── check.rs                        # tjek 校验报告
-│       ├── validate.rs                     # 四字段 JSON 校验
-│       ├── json_dsl.rs                     # JSONTokener 兼容解析
-│       └── user_dir.rs                     # ~/.termux 目录规范
+│       ├── user_dir.rs                     # ~/.termux 目录与模板 provision
+│       └── conformance.rs                  # Rust ↔ Java 共享语料测试
+│
+├── conformance/                            # 与 App 内 Java 解析器共享的 fixture
+│   ├── manifest.tsv
+│   ├── cases/*.tekl
+│   └── README.md
 │
 ├── ebnf/                                   # 语法定义
 │   ├── tekl.ebnf
 │   └── ttoll.ebnf
+│
+├── scripts/
+│   ├── package-release.sh                  # 交叉编译打包
+│   └── sync-conformance.sh                 # 同步 fixture 到 termux-app
 │
 ├── termux.tekl                             # 布局源码示例
 ├── Cargo.toml

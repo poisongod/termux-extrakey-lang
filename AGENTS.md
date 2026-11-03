@@ -80,8 +80,8 @@ git tag vX.Y.Z && git push origin vX.Y.Z
   （字符级和弦）**非法**：`tokenize_rule` 直接拒绝，`is_known_key`/`crossterm_to_chord` 不产生候选。
   Ctrl+C（退出）、Ctrl+S（保存）等系统级快捷由**输入层硬编码**（布局 TUI `app.rs::handle_event`，
   编辑器 `editor.rs` Ctrl+C 强退），不经 ttoll。
-  改文法 = 破坏性变更，须同步 behavior.rs 与全部 `.ttoll` 及测试。`ebnf/` 下 `.ebnf` 与
-  `.ebnf.txt` 双份须同步。
+  改文法 = 破坏性变更，须同步 behavior.rs 与全部 `.ttoll` 及测试。`ebnf/*.ebnf.txt` 是指向
+  同名 `.ebnf` 的符号链接，改一处即可。
 - **输入层打字不经 ttoll**：编辑器 Insert 模式、布局 TUI 的 Edit/Popup 模式的字符/退格/Tab 直接
   内部处理；只有 crossterm 事件归一化出的键名（K∪D，及 CTRL+/ALT+ 且尾键属文法的和弦）走 dispatch。
 - **round-trip 契约**：keys.rs 序列化结果必须被自身解析器还原一致——动它必跑测试。
