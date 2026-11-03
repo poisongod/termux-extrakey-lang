@@ -109,6 +109,9 @@ tekl check <file> [--strict]      # 只校验语法与警告，不写盘、不 r
 - **弹出键编辑**（Popup，`0x03`）：编辑弹出键值，字段限定在弹出内容。
 - 插入菜单（由 `0x40` 打开）：增行/增列/删列，Enter 确认后交 ID 插件执行。
 - `Ctrl+S` 保存、`Ctrl+C` 退出 —— 输入层硬编码，不经 ttoll。
+- **无损存盘**：未改动的行按原文件逐字节写回，`#` 注释、空行、缩进、行尾注释与
+  全局设置都保留；只有新增/修改的行会规范化。行内全局设置（`ESC height = 2 TAB;`）
+  在改写该行时会移到文件末尾，不会丢失。
 
 ### 行为规则编辑器（`tekl edit editor.ttoll`）
 
@@ -158,7 +161,7 @@ tekl check <file> [--strict]      # 只校验语法与警告，不写盘、不 r
 | `;` | 键盘行分隔符 |
 
 全局设置（`height = 40`、`theme = dark`、`layout = extra`、`reload`）会被 CLI/TUI 解析并在
-TUI 存盘时保留；Termux App 只读键盘矩阵，会忽略这些行。`tekl reload` 写布局时也会剥离它们。
+TUI 存盘时原位保留；Termux App 只读键盘矩阵，会忽略这些行。`tekl reload` 写布局时也会剥离它们。
 
 示例（仓库 `termux.tekl`，实体键盘映射 + 倒 T 方向键）：
 

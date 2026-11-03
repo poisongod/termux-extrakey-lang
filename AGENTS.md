@@ -61,6 +61,10 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 - **ttoll 解析返回 `Result`**：`tokenize_rule`/`parse_rules` 遇到非法规则返回带行号的
   `BehaviorError`，不再 panic；LHS 的步骤、模式前缀、和弦与 `{}` 内容都会 trim。
   TUI 启动时若 `tekl.ttoll`/`editor.ttoll` 非法，会以清晰错误退出，而不是崩溃。
+- **布局 TUI 无损存盘**：`keys::parse` 额外返回 `row_spans`/`global_positions`（源码 1-based
+  行列）。`App::to_source` 用 LCS 对齐新旧行，只规范化新增/修改行；未改行按 span 原样
+  复制。没有改动时直接返回原文件。行内全局设置若随行重写，会被移到末尾而不是丢弃。
+  断言见 `app_save_without_edit_is_byte_identical`、`app_roundtrips_every_ok_conformance_fixture`。
 
 ## 关键不变量
 

@@ -372,11 +372,26 @@ impl Global {
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    /// End position (line, column) of the last consumed non-trivia token.
+    last_end: (usize, usize),
+}
+
+/// End position (1-based line, char column) of a token.
+fn token_end(tok: &Token) -> (usize, usize) {
+    let (line, column) = (tok.line(), tok.column());
+    let width = match tok {
+        Token::Ident { value, .. } => value.chars().count(),
+        Token::Literal { value, .. } => value.chars().count() + 2,
+        Token::Number { value, .. } => value.to_string().chars().count(),
+        Token::Newline { .. } | Token::Eof { .. } => 0,
+        _ => 1,
+    };
+    (line, column + width)
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser { tokens, pos: 0, last_end: (0, 0) }
     }
 
     fn peek(&self) -> &Token {
@@ -386,6 +401,9 @@ impl Parser {
     fn next(&mut self) -> Token {
         let tok = self.tokens.get(self.pos).cloned().unwrap_or(Token::Eof { line: 0, column: 0 });
         self.pos += 1;
+        if !matches!(tok, Token::Newline { .. } | Token::Eof { .. }) {
+            self.last_end = token_end(&tok);
+        }
         tok
     }
 
@@ -503,10 +521,24 @@ impl Parser {
         })
     }
 
-    fn parse_program(&mut self) -> Result<(Vec<Vec<AstNode>>, Vec<Global>), ParseError> {
+    fn parse_program(
+        &mut self,
+    ) -> Result<
+        (
+            Vec<Vec<AstNode>>,
+            Vec<Global>,
+            Vec<RowSpan>,
+            Vec<(usize, usize)>,
+        ),
+        ParseError,
+    > {
         let mut rows: Vec<Vec<AstNode>> = Vec::new();
         let mut row: Vec<AstNode> = Vec::new();
         let mut globals: Vec<Global> = Vec::new();
+        let mut row_spans: Vec<RowSpan> = Vec::new();
+        let mut global_positions: Vec<(usize, usize)> = Vec::new();
+        // Where the current row started in the source (first significant token).
+        let mut row_start: Option<(usize, usize)> = None;
 
         loop {
             let tok = self.peek().clone();
@@ -518,23 +550,37 @@ impl Parser {
                     continue;
                 }
                 Token::Semi { .. } => {
+                    let end = (tok.line(), tok.column() + 1);
                     self.next();
                     if !row.is_empty() {
-                        rows.push(row);
-                        row = Vec::new();
+                        rows.push(std::mem::take(&mut row));
+                        let start = row_start.take().unwrap_or(end);
+                        row_spans.push(RowSpan {
+                            start_line: start.0,
+                            start_col: start.1,
+                            end_line: end.0,
+                            end_col: end.1,
+                        });
                     }
                     continue;
                 }
                 Token::Ident { value, .. } => {
                     let lower = value.to_lowercase();
                     if matches!(lower.as_str(), "height" | "theme" | "layout" | "reload") {
+                        global_positions.push((tok.line(), tok.column()));
                         globals.push(self.parse_global()?);
                         continue;
+                    }
+                    if row.is_empty() {
+                        row_start = Some((tok.line(), tok.column()));
                     }
                     row.push(self.parse_entry()?);
                     continue;
                 }
                 Token::Literal { .. } => {
+                    if row.is_empty() {
+                        row_start = Some((tok.line(), tok.column()));
+                    }
                     row.push(self.parse_entry()?);
                     continue;
                 }
@@ -550,11 +596,18 @@ impl Parser {
 
         if !row.is_empty() {
             rows.push(row);
+            let start = row_start.take().unwrap_or(self.last_end);
+            row_spans.push(RowSpan {
+                start_line: start.0,
+                start_col: start.1,
+                end_line: self.last_end.0,
+                end_col: self.last_end.1,
+            });
         }
 
         validate_rows(&rows)?;
 
-        Ok((rows, globals))
+        Ok((rows, globals, row_spans, global_positions))
     }
 }
 
@@ -603,9 +656,26 @@ fn validate_rows(rows: &[Vec<AstNode>]) -> Result<(), ParseError> {
 // Public parse function
 // ═══════════════════════════════════════════════════════════════════
 
+/// Source span of a parsed matrix row (1-based line, char column).
+///
+/// The span covers exactly the row's own tokens, from its first significant
+/// token through the terminating `;` (or the last token when the final row
+/// omits `;`). Leading/trailing comments and whitespace stay outside the span,
+/// which lets the TUI rewrite only the rows that actually changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowSpan {
+    pub start_line: usize,
+    pub start_col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+}
+
 pub struct ParseResult {
     pub rows: Vec<Vec<AstNode>>,
     pub globals: Vec<Global>,
+    pub row_spans: Vec<RowSpan>,
+    /// 1-based (line, column) where each global assignment starts (parallel to `globals`).
+    pub global_positions: Vec<(usize, usize)>,
 }
 
 pub fn parse(src: &str) -> Result<ParseResult, ParseError> {
@@ -621,8 +691,13 @@ pub fn parse(src: &str) -> Result<ParseResult, ParseError> {
         }
     })?;
     let mut parser = Parser::new(tokens);
-    let (rows, globals) = parser.parse_program()?;
-    Ok(ParseResult { rows, globals })
+    let (rows, globals, row_spans, global_positions) = parser.parse_program()?;
+    Ok(ParseResult {
+        rows,
+        globals,
+        row_spans,
+        global_positions,
+    })
 }
 
 pub fn format_parse_error(source: &str, err: &ParseError) -> String {
@@ -1118,6 +1193,40 @@ mod tests {
             result.rows[0][0],
             AstNode::Key { key: "d".into(), kind: KeyKind::Literal }
         );
+    }
+
+    #[test]
+    fn row_spans_cover_each_row() {
+        let r = parse("# c\nESC; TAB;\n").unwrap();
+        assert_eq!(r.row_spans.len(), 2);
+        assert_eq!(
+            (r.row_spans[0].start_line, r.row_spans[0].start_col),
+            (2, 1)
+        );
+        assert_eq!((r.row_spans[0].end_line, r.row_spans[0].end_col), (2, 5));
+        assert_eq!(
+            (r.row_spans[1].start_line, r.row_spans[1].start_col),
+            (2, 6)
+        );
+        assert_eq!((r.row_spans[1].end_line, r.row_spans[1].end_col), (2, 10));
+    }
+
+    #[test]
+    fn row_span_without_trailing_semicolon_ends_at_last_token() {
+        let r = parse("ESC").unwrap();
+        assert_eq!(r.row_spans.len(), 1);
+        assert_eq!(
+            (r.row_spans[0].start_line, r.row_spans[0].start_col),
+            (1, 1)
+        );
+        assert_eq!((r.row_spans[0].end_line, r.row_spans[0].end_col), (1, 4));
+    }
+
+    #[test]
+    fn global_positions_are_recorded() {
+        let r = parse("height = 2\nESC;\nreload\nTAB;").unwrap();
+        assert_eq!(r.global_positions, vec![(1, 1), (3, 1)]);
+        assert_eq!(r.globals.len(), 2);
     }
 
     #[test]

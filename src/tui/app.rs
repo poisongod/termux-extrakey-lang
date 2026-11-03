@@ -104,6 +104,12 @@ pub struct App {
     should_quit: bool,
     globals: Vec<keys::Global>,
     source: String,
+    /// Matrix rows as of the last load/save; used to keep unchanged rows byte-identical.
+    source_rows: Vec<Vec<AstNode>>,
+    /// Source span of each row in `source` (parallel to `source_rows`).
+    row_spans: Vec<keys::RowSpan>,
+    /// Source position of each global in `source` (parallel to `globals`).
+    global_positions: Vec<(usize, usize)>,
     // ttoll dispatch table
     ttoll_table: HashMap<Option<String>, Vec<behavior::Rule>>,
     // ID registry (keyboard TUI specific)
@@ -123,9 +129,87 @@ pub struct App {
     redo_stack: Vec<Vec<Vec<AstNode>>>,
 }
 
+/// Canonical one-line form of a matrix row (what the printer emits).
+fn canonical_row(row: &[AstNode]) -> String {
+    let entries: Vec<String> = row.iter().map(|n| keys::print_entry(n)).collect();
+    format!("{};", entries.join(" "))
+}
+
+/// Canonical document: one row per line, then every global. Used when no source
+/// spans are available (new file, or a source we could not re-parse).
+fn canonical_document(rows: &[String], globals: &[keys::Global]) -> String {
+    let mut lines: Vec<String> = rows.to_vec();
+    lines.extend(globals.iter().map(|g| g.to_source()));
+    lines.join("\n")
+}
+
+/// Byte offset of each line start (line 1 starts at 0).
+fn line_starts(src: &str) -> Vec<usize> {
+    let mut starts = vec![0usize];
+    for (i, c) in src.char_indices() {
+        if c == '\n' {
+            starts.push(i + 1);
+        }
+    }
+    starts
+}
+
+/// Convert a 1-based (line, char column) position to a byte offset.
+fn offset_of(src: &str, starts: &[usize], line: usize, column: usize) -> usize {
+    let start = match starts.get(line.saturating_sub(1)) {
+        Some(&s) if s <= src.len() => s,
+        _ => return src.len(),
+    };
+    let rest = &src[start..];
+    let mut count = 1usize;
+    for (bi, ch) in rest.char_indices() {
+        if ch == '\n' {
+            return start + bi;
+        }
+        if count == column {
+            return start + bi;
+        }
+        count += 1;
+    }
+    start + rest.find('\n').unwrap_or(rest.len())
+}
+
+/// Longest-common-subsequence alignment of original rows to current rows.
+/// Returns, for each original row, the current row it maps to (or `None`).
+fn lcs_matches(original: &[String], current: &[String]) -> Vec<Option<usize>> {
+    let n = original.len();
+    let m = current.len();
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if original[i] == current[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+
+    let mut out = vec![None; n];
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < n && j < m {
+        if original[i] == current[j] {
+            out[i] = Some(j);
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
+}
+
 impl App {
     fn new(file_path: PathBuf, source: String) -> anyhow::Result<Self> {
         let result = keys::parse(&source)?;
+        let source_rows = result.rows.clone();
 
         // Load tekl.ttoll dispatch rules
         let ttoll_path = crate::lib::user_dir::user_root().join("tekl.ttoll");
@@ -147,6 +231,9 @@ impl App {
             should_quit: false,
             globals: result.globals,
             source,
+            source_rows,
+            row_spans: result.row_spans,
+            global_positions: result.global_positions,
             ttoll_table,
             id_registry,
             edit_field: EditField::Key,
@@ -381,6 +468,23 @@ impl App {
                 self.modified = false;
                 self.status_msg = format!("已保存: {}", self.file_path.display());
                 self.status_is_error = false;
+
+                // Refresh the span baseline so the next save patches the file we just wrote.
+                self.source = content.clone();
+                match keys::parse(&content) {
+                    Ok(parsed) => {
+                        self.rows = parsed.rows;
+                        self.source_rows = self.rows.clone();
+                        self.row_spans = parsed.row_spans;
+                        self.global_positions = parsed.global_positions;
+                        self.globals = parsed.globals;
+                    }
+                    Err(_) => {
+                        // Should not happen (we only emit canonical rows), but never lose data.
+                        self.source_rows = self.rows.clone();
+                        self.row_spans.clear();
+                    }
+                }
             }
             Err(e) => {
                 self.status_msg = format!("保存失败: {}", e);
@@ -389,17 +493,116 @@ impl App {
         }
     }
 
+    /// Serialize the matrix back to tekl.
+    ///
+    /// Rows that were not changed are copied from the original source verbatim, so
+    /// comments, blank lines, indentation, inline `#` notes and global assignments
+    /// survive a TUI edit. Only inserted/edited rows are written canonically.
     fn to_source(&self) -> String {
-        let mut lines: Vec<String> = Vec::new();
-        for (_i, row) in self.rows.iter().enumerate() {
-            let entries: Vec<String> = row.iter().map(|n| keys::print_entry(n)).collect();
-            lines.push(format!("{};", entries.join(" ")));
+        let current: Vec<String> = self.rows.iter().map(|row| canonical_row(row)).collect();
+        let original: Vec<String> = self
+            .source_rows
+            .iter()
+            .map(|row| canonical_row(row))
+            .collect();
+
+        // Nothing changed: keep the file byte-identical.
+        if current == original {
+            return self.source.clone();
         }
-        // Add globals
-        for g in &self.globals {
-            lines.push(g.to_source());
+        // No usable spans (new file or a failed refresh): canonical output.
+        if self.row_spans.len() != self.source_rows.len() {
+            return canonical_document(&current, &self.globals);
         }
-        lines.join("\n")
+
+        let starts = line_starts(&self.source);
+        let spans: Vec<(usize, usize)> = self
+            .row_spans
+            .iter()
+            .map(|s| {
+                (
+                    offset_of(&self.source, &starts, s.start_line, s.start_col),
+                    offset_of(&self.source, &starts, s.end_line, s.end_col),
+                )
+            })
+            .collect();
+
+        let nl = if self.source.contains("\r\n") { "\r\n" } else { "\n" };
+        let matches = lcs_matches(&original, &current);
+
+        let mut out = String::new();
+        let mut cur = 0usize;
+        let mut prev_end = 0usize;
+        // Original row ranges whose text was not emitted verbatim. Globals that
+        // lived inside them are re-emitted at the end instead of being dropped.
+        let mut dropped: Vec<(usize, usize)> = Vec::new();
+
+        for (oi, &(start, end)) in spans.iter().enumerate() {
+            let start = start.max(prev_end).min(self.source.len());
+            let end = end.max(start).min(self.source.len());
+            let mut gap = &self.source[prev_end..start];
+            if out.is_empty() {
+                // A deleted first row can leave its leading newline behind.
+                gap = gap.trim_start_matches(['\r', '\n']);
+            }
+
+            match matches[oi] {
+                Some(ci) => {
+                    while cur < ci {
+                        if !out.is_empty() && !out.ends_with('\n') {
+                            out.push_str(nl);
+                        }
+                        out.push_str(&current[cur]);
+                        cur += 1;
+                    }
+                    out.push_str(gap);
+                    if original[oi] == current[ci] {
+                        out.push_str(&self.source[start..end]);
+                    } else {
+                        out.push_str(&current[ci]);
+                        dropped.push((start, end));
+                    }
+                    cur = ci + 1;
+                }
+                None => {
+                    // Row deleted: keep comments/globals that sat between rows,
+                    // drop only the row's own text.
+                    if gap.chars().any(|c| !c.is_whitespace()) {
+                        out.push_str(gap);
+                    }
+                    dropped.push((start, end));
+                }
+            }
+            prev_end = end;
+        }
+
+        while cur < current.len() {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push_str(nl);
+            }
+            out.push_str(&current[cur]);
+            cur += 1;
+        }
+        out.push_str(&self.source[prev_end.min(self.source.len())..]);
+
+        let rescued: Vec<String> = self
+            .global_positions
+            .iter()
+            .zip(self.globals.iter())
+            .filter(|((line, col), _)| {
+                let off = offset_of(&self.source, &starts, *line, *col);
+                dropped.iter().any(|(s, e)| off >= *s && off < *e)
+            })
+            .map(|(_, g)| g.to_source())
+            .collect();
+        if !rescued.is_empty() {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push_str(nl);
+            }
+            out.push_str(&rescued.join(nl));
+        }
+
+        out
     }
 
     fn insert_row_after(&mut self) {
@@ -1599,5 +1802,163 @@ mod tests {
         assert_eq!(App::display_name(&app.rows[0][0]), "a");
         app.redo();
         assert_eq!(App::display_name(&app.rows[0][0]), "ESC");
+    }
+
+    fn app_from(source: &str) -> App {
+        App::new(PathBuf::from("test.tekl"), source.to_string()).unwrap()
+    }
+
+    #[test]
+    fn app_save_without_edit_is_byte_identical() {
+        let source = "# header\n\nESC; # inline\nheight = 40\n\nTAB;\n# footer";
+        assert_eq!(app_from(source).to_source(), source);
+    }
+
+    #[test]
+    fn app_edit_keeps_comments_globals_and_footer() {
+        let source = "# header\nESC; # inline\nheight = 40\nTAB;\n# footer";
+        let mut app = app_from(source);
+        app.rows[0][0] = AstNode::Key { key: "HOME".into(), kind: KeyKind::Special };
+
+        let out = app.to_source();
+        assert!(out.contains("HOME;"), "{out}");
+        assert!(out.contains("# header"), "{out}");
+        assert!(out.contains("# inline"), "{out}");
+        assert!(out.contains("height = 40"), "{out}");
+        assert!(out.contains("# footer"), "{out}");
+
+        let reparsed = keys::parse(&out).unwrap();
+        assert_eq!(reparsed.rows.len(), 2);
+        assert_eq!(reparsed.globals.len(), 1);
+    }
+
+    #[test]
+    fn app_insert_row_keeps_comments() {
+        let source = "# top\nESC;\n# mid\nTAB;\n# tail";
+        let mut app = app_from(source);
+        app.insert_row_after();
+
+        let out = app.to_source();
+        for needle in ["# top", "# mid", "# tail"] {
+            assert!(out.contains(needle), "missing {needle}: {out}");
+        }
+        assert_eq!(keys::parse(&out).unwrap().rows.len(), 3);
+    }
+
+    #[test]
+    fn app_delete_row_keeps_comments() {
+        let source = "# top\nESC;\n# mid\nTAB;\n# tail";
+        let mut app = app_from(source);
+        app.delete_row();
+
+        let out = app.to_source();
+        for needle in ["# top", "# mid", "# tail"] {
+            assert!(out.contains(needle), "missing {needle}: {out}");
+        }
+        assert!(!out.contains("ESC;"), "{out}");
+        assert_eq!(keys::parse(&out).unwrap().rows.len(), 1);
+    }
+
+    #[test]
+    fn app_rows_on_one_line_stay_parseable() {
+        let source = "ESC; a b;";
+        let mut app = app_from(source);
+        app.rows[0][0] = AstNode::Key { key: "HOME".into(), kind: KeyKind::Special };
+
+        let out = app.to_source();
+        let reparsed = keys::parse(&out).unwrap();
+        assert_eq!(reparsed.rows.len(), 2);
+        assert_eq!(App::display_name(&reparsed.rows[1][1]), "b");
+    }
+
+    #[test]
+    fn app_inline_global_survives_row_rewrite() {
+        // `height = 2` lives inside the row's source span; rewriting the row must
+        // not drop the setting.
+        let source = "ESC height = 2 TAB;";
+        let mut app = app_from(source);
+        app.rows[0][0] = AstNode::Key { key: "HOME".into(), kind: KeyKind::Special };
+
+        let out = app.to_source();
+        let reparsed = keys::parse(&out).unwrap();
+        assert_eq!(reparsed.rows.len(), 1);
+        assert_eq!(reparsed.globals.len(), 1);
+        assert_eq!(reparsed.globals[0].key, "height");
+        assert!(matches!(
+            reparsed.globals[0].value,
+            keys::GlobalValue::Number(2)
+        ));
+    }
+
+    #[test]
+    fn app_global_after_row_on_same_line_is_not_duplicated() {
+        // The global sits after the row's `;`, so it is preserved by the gap and
+        // must not be rescued a second time.
+        let source = "ESC; height = 2\nTAB;";
+        let mut app = app_from(source);
+        app.rows[0][0] = AstNode::Key { key: "HOME".into(), kind: KeyKind::Special };
+
+        let out = app.to_source();
+        assert_eq!(out.matches("height = 2").count(), 1, "{out}");
+        assert_eq!(keys::parse(&out).unwrap().globals.len(), 1);
+    }
+
+    #[test]
+    fn app_crlf_is_kept_for_inserted_rows() {
+        let source = "ESC;\r\nTAB;\r\n";
+        let mut app = app_from(source);
+        app.insert_row_after();
+
+        let out = app.to_source();
+        assert!(out.contains("SPACE;\r\n"), "{out:?}");
+        assert!(!out.contains("SPACE;\n"), "{out:?}");
+    }
+
+    #[test]
+    fn app_save_file_writes_losslessly_and_refreshes_baseline() {
+        let dir = std::env::temp_dir().join(format!("tekl-app-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("termux.tekl");
+        let source = "# h\nESC;\n# foot";
+        std::fs::write(&path, source).unwrap();
+
+        let mut app = App::new(path.clone(), source.to_string()).unwrap();
+        app.rows[0][0] = AstNode::Key { key: "HOME".into(), kind: KeyKind::Special };
+        app.save_file();
+
+        let first = std::fs::read_to_string(&path).unwrap();
+        assert!(first.contains("# h"), "{first}");
+        assert!(first.contains("# foot"), "{first}");
+        assert!(first.contains("HOME;"), "{first}");
+
+        // Second save without edits must not churn the file.
+        app.save_file();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app_roundtrips_every_ok_conformance_fixture() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest = root.join("conformance/manifest.tsv");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+
+        let mut checked = 0;
+        for line in text.lines() {
+            let cols: Vec<&str> = line.split('\t').collect();
+            if cols.len() < 2 || cols[1] != "ok" {
+                continue;
+            }
+            let path = root.join("conformance/cases").join(format!("{}.tekl", cols[0]));
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let app = App::new(path.clone(), source.clone())
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert_eq!(app.to_source(), source, "{}", path.display());
+            checked += 1;
+        }
+        assert!(checked >= 20, "only checked {checked} fixtures");
     }
 }
