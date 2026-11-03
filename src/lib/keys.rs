@@ -871,7 +871,11 @@ pub struct CompileSourceResult {
 }
 
 pub fn compile_source(src: &str) -> Result<CompileSourceResult, CompileError> {
-    let result = parse(src).map_err(|e| CompileError::new(format!("{e}")))?;
+    let result = parse(src).map_err(|e| match e {
+        ParseError::UnexpectedToken { message, line, column } => {
+            CompileError::new(format!("{message} (line {line}, column {column})"))
+        }
+    })?;
     validate_compiled_rows(&result.rows)?;
     let mut warnings = collect_warnings(&result.rows);
 

@@ -21,6 +21,11 @@ enum Commands {
         /// File to edit: .ttoll → behavior editor, .tekl → keyboard TUI
         file: String,
     },
+    /// Validate a .tekl file without writing or reloading anything
+    Check {
+        /// Source .tekl file
+        file: String,
+    },
     /// Compile .tekl file and write ~/.termux/termux.tekl
     Reload {
         /// Source .tekl file
@@ -38,7 +43,10 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // 首次运行补齐 ~/.termux 模板（Release 包里模板位于可执行文件同目录）
-    if !matches!(&cli.command, Some(Commands::Reload { .. })) {
+    if !matches!(
+        &cli.command,
+        Some(Commands::Reload { .. }) | Some(Commands::Check { .. })
+    ) {
         lib::user_dir::provision_user_dir();
     }
 
@@ -60,6 +68,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Some(Commands::Check { file }) => compiler::generator::check(&file),
         Some(Commands::Reload { file, output, no_reload }) => {
             compiler::generator::run_compile(&file, output.as_deref(), !no_reload)
         }

@@ -43,6 +43,19 @@ pub fn run_compile(file: &str, output: Option<&str>, reload: bool) -> anyhow::Re
     Ok(())
 }
 
+/// Validate a tekl file and print its warnings. Writes nothing and does not reload.
+pub fn check(file: &str) -> anyhow::Result<()> {
+    let source = fs::read_to_string(file)?;
+    let result = lib::keys::compile_source(&source)?;
+
+    for w in &result.warnings {
+        eprintln!("warning: {w}");
+    }
+
+    eprintln!("ok: {} ({} rows)", file, result.rows.len());
+    Ok(())
+}
+
 fn resolve_extra_keys_path(output: Option<&str>) -> PathBuf {
     match output {
         Some(p) => PathBuf::from(p),
@@ -101,6 +114,35 @@ mod tests {
         run_compile(src.to_str().unwrap(), Some(dst.to_str().unwrap()), false).unwrap();
 
         assert_eq!(fs::read_to_string(&dst).unwrap(), "ESC;\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_accepts_valid_file_without_writing() {
+        let dir = temp_dir("check-valid");
+        let src = dir.join("layout.tekl");
+        let original = "# keep me\nESC; a b;\n";
+        fs::write(&src, original).unwrap();
+
+        check(src.to_str().unwrap()).unwrap();
+
+        assert_eq!(fs::read_to_string(&src).unwrap(), original);
+        assert!(!src.with_extension("tekl.bak").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_reports_line_and_column() {
+        let dir = temp_dir("check-invalid");
+        let src = dir.join("broken.tekl");
+        fs::write(&src, "ESC(\n").unwrap();
+
+        let err = check(src.to_str().unwrap()).unwrap_err().to_string();
+
+        assert!(err.contains("line 1"), "{err}");
+        assert!(err.contains("column 5"), "{err}");
+        // The `keys:` prefix must appear exactly once, not "keys: keys:".
+        assert_eq!(err.matches("keys:").count(), 1, "{err}");
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -96,6 +96,7 @@ tekl                              # 布局 TUI，编辑 ~/.termux/termux.tekl（
 tekl edit <file>                  # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错
 tekl reload <file> [--no-reload]  # 编译 .tekl → ~/.termux/termux.tekl → termux-reload-settings
 tekl reload <file> --output out.tekl  # 写到指定路径（不覆盖默认布局）
+tekl check <file>                 # 只校验语法与警告，不写盘、不 reload
 ```
 
 ### 布局 TUI（`tekl` / `tekl edit keys.tekl`）
@@ -332,6 +333,9 @@ ttoll 编辑器（0x00–0x17 共 24 个）：
 
 `--no-reload` 跳过第 4 步。G 全局设置（`height=` / `theme=` / `layout=` / `reload`）
 会被解析但当前 Termux App 不接受，reload 时会打印警告并忽略。
+
+`tekl check <file>` 走同一套 `compile_source`，只打印警告与 `ok: <file> (<n> rows)`，
+不写盘、不调用 `termux-reload-settings`，适合编辑器保存钩子与 CI。
 
 ## 架构与契约
 

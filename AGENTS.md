@@ -8,7 +8,7 @@ tekl — Termux 键盘布局 DSL + TUI 工具链。**Rust Core + Rhai ID 插件*
 
 ## 布局
 
-- `src/main.rs` — 入口。子命令 `edit` / `reload` 的 `<file>` 均为必填；无参即布局 TUI。
+- `src/main.rs` — 入口。子命令 `edit` / `reload` / `check` 的 `<file>` 均为必填；无参即布局 TUI。
 - `src/lib/` — 共享核心（**Cargo.toml 无 [lib]，只是 bin crate 内的 `mod lib`**）：
   - `keys.rs` tekl 词法/语法/编译/打印（round-trip 契约）
   - `behavior.rs` ttoll 解析 + `dispatch`/`dispatch_chord` + 静态检查
@@ -37,6 +37,9 @@ tekl                          # 布局 TUI，编辑 ~/.termux/termux.tekl（首�
 tekl edit <file>              # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错退出
 tekl reload <file> [--no-reload]
                               # 编译 .tekl → 原子写 ~/.termux/termux.tekl → termux-reload-settings
+tekl reload <file> --output <path>
+                              # 写到指定路径；源文件即目标文件时只校验不重写
+tekl check <file>             # 只校验并打印警告，不写盘、不 reload
 git tag vX.Y.Z && git push origin vX.Y.Z
                               # 触发 Release：NDK 交叉编译 aarch64/armv7 → 打包 → 发布
 ```
