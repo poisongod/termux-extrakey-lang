@@ -31,3 +31,8 @@ bad_global_eq	error	1	8
 reload_assignment	error	1	8	
 leading_dot	error	1	1	
 number_overflow	error	1	10	
+newline_is_not_a_separator	ok			1
+comment_inside_row	ok			1
+global_mid_entries	ok			1
+spaces_around_syntax	ok			2
+label_numeric	ok			1

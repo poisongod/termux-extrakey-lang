@@ -94,67 +94,69 @@ pub struct Step {
 
 // ── Rule parsing ─────────────────────────────────────────────────────
 
-/// Parse a single rule line into an `Option<Rule>`.
+fn invalid_rule(message: impl Into<String>) -> BehaviorError {
+    BehaviorError::Msg(message.into())
+}
+
+/// Parse a single rule line.
 ///
-/// Lines that are empty, comments `(*…*)`, or grammar headers (`K = …`) return `None`.
-pub fn tokenize_rule(line: &str) -> Option<Rule> {
+/// Lines that are empty, comments `(*…*)`, grammar headers (`K = …`), or lines
+/// without a depth-0 `>` return `Ok(None)`. All malformed rules return `Err`
+/// instead of panicking.
+pub fn tokenize_rule(line: &str) -> Result<Option<Rule>> {
     let s = line.trim();
-    if s.is_empty() || s.starts_with("(*") {
-        return None;
-    }
-    if is_grammar_header(s) {
-        return None;
+    if s.is_empty() || s.starts_with("(*") || is_grammar_header(s) {
+        return Ok(None);
     }
 
-    // Find the `>` separator (the last one that isn't inside braces).
-    let gt_pos = find_gt_position(s)?;
+    // Find the `>` separator (the first one that isn't inside braces).
+    let Some(gt_pos) = find_gt_position(s) else {
+        return Ok(None);
+    };
 
     let (lhs, action) = s.split_at(gt_pos);
-    let action = &action[1..]; // skip '>'
+    let action = action[1..].trim(); // skip '>'
 
-    if lhs.trim().is_empty() || action.trim().is_empty() {
-        panic!("invalid rule: {:?}", line);
+    if lhs.trim().is_empty() || action.is_empty() {
+        return Err(invalid_rule(format!("invalid rule: {line:?}")));
     }
 
-    // Check if lhs starts with a mode prefix: `0xHH,rest`
+    // Check if lhs starts with a mode prefix: `0xHH,rest`.
+    // Whitespace before the comma is tolerated: `0x01 ,ESC` == `0x01,ESC`.
     if let Some(comma_pos) = lhs.find(',') {
-        let prefix = &lhs[..comma_pos];
+        let prefix = lhs[..comma_pos].trim();
         if is_hex_mode(prefix) {
-            let mode = prefix;
-            if !is_mode(mode) {
-                panic!(
-                    "invalid mode '{}': must be 0x01, 0x02, or 0x03",
-                    mode
-                );
+            if !is_mode(prefix) {
+                return Err(invalid_rule(format!(
+                    "invalid mode '{prefix}': must be 0x01, 0x02, or 0x03"
+                )));
             }
             let rest = &lhs[comma_pos + 1..];
             if rest.trim().is_empty() {
-                panic!("invalid rule: {:?}", line);
+                return Err(invalid_rule(format!("invalid rule: {line:?}")));
             }
-            let steps = split_steps(rest);
-            if steps.is_empty() {
-                panic!("invalid rule (empty steps): {:?}", line);
-            }
-            let steps = steps.iter().map(|s| parse_step(s)).collect();
-            return Some(Rule {
-                mode: Some(mode.to_string()),
-                steps,
-                action: action.trim().to_string(),
-            });
+            return Ok(Some(Rule {
+                mode: Some(prefix.to_string()),
+                steps: parse_steps(rest)?,
+                action: action.to_string(),
+            }));
         }
     }
 
-    // No mode prefix
-    let steps = split_steps(lhs);
-    if steps.is_empty() {
-        panic!("invalid rule (empty steps): {:?}", line);
-    }
-    let steps = steps.iter().map(|s| parse_step(s)).collect();
-    Some(Rule {
+    // No mode prefix.
+    Ok(Some(Rule {
         mode: None,
-        steps,
-        action: action.trim().to_string(),
-    })
+        steps: parse_steps(lhs)?,
+        action: action.to_string(),
+    }))
+}
+
+fn parse_steps(input: &str) -> Result<Vec<Step>> {
+    let segments = split_steps(input)?;
+    if segments.is_empty() {
+        return Err(invalid_rule("invalid rule: empty step list"));
+    }
+    segments.iter().map(|s| parse_step(s)).collect()
 }
 
 /// Find the position of `>` that acts as the rule separator (not inside braces).
@@ -172,7 +174,8 @@ fn find_gt_position(s: &str) -> Option<usize> {
 }
 
 /// Split a comma-separated step string, respecting `{…}` nesting.
-fn split_steps(rest: &str) -> Vec<String> {
+/// Each segment is trimmed; empty segments (leading/trailing/double commas) are skipped.
+fn split_steps(rest: &str) -> Result<Vec<String>> {
     let mut segs = Vec::new();
     let mut cur = String::new();
     let mut depth: i32 = 0;
@@ -181,64 +184,71 @@ fn split_steps(rest: &str) -> Vec<String> {
         match ch {
             '{' => {
                 if depth > 0 {
-                    panic!("nested block: {}", rest);
+                    return Err(invalid_rule(format!("nested block: {rest}")));
                 }
                 depth = 1;
                 cur.push(ch);
             }
             '}' => {
                 if depth != 1 {
-                    panic!("unbalanced block: {}", rest);
+                    return Err(invalid_rule(format!("unbalanced block: {rest}")));
                 }
                 depth = 0;
                 cur.push(ch);
             }
             ',' if depth == 0 => {
-                if !cur.is_empty() {
-                    segs.push(std::mem::take(&mut cur));
+                let seg = cur.trim();
+                if !seg.is_empty() {
+                    segs.push(seg.to_string());
                 }
+                cur.clear();
             }
             _ => cur.push(ch),
         }
     }
 
     if depth != 0 {
-        panic!("unbalanced block: {}", rest);
+        return Err(invalid_rule(format!("unbalanced block: {rest}")));
     }
-    if !cur.is_empty() {
-        segs.push(cur);
+    let seg = cur.trim();
+    if !seg.is_empty() {
+        segs.push(seg.to_string());
     }
-    segs
+    Ok(segs)
 }
 
 /// Parse a single step segment → `Step`.
-fn parse_step(seg: &str) -> Step {
-    if seg.starts_with('{') && seg.ends_with('}') {
+fn parse_step(seg: &str) -> Result<Step> {
+    let seg = seg.trim();
+
+    if seg.starts_with('{') || seg.ends_with('}') {
+        if !(seg.starts_with('{') && seg.ends_with('}')) {
+            return Err(invalid_rule(format!("malformed block step '{seg}'")));
+        }
         let inner = &seg[1..seg.len() - 1];
-        let keys = parse_key_set(inner);
-        return Step {
-            keys,
+        return Ok(Step {
+            keys: parse_key_set(inner)?,
             star: true,
             block: true,
-        };
+        });
     }
 
     let star = seg.ends_with('*') || seg.contains('+');
     let k = if star && !seg.contains('+') { &seg[..seg.len() - 1] } else { seg };
-    let keys = expand_key(k).into_iter().collect();
+    let keys = expand_key(k)?.into_iter().collect();
 
-    // Chord keys (containing '+') are treated as block steps
+    // Chord keys (containing '+') are treated as block steps.
     let is_chord = k.contains('+');
 
-    Step {
+    Ok(Step {
         keys,
         star,
         block: is_chord,
-    }
+    })
 }
 
 /// Parse an inner key set (comma-separated names) → `HashSet<String>`.
-fn parse_key_set(inner: &str) -> HashSet<String> {
+fn parse_key_set(inner: &str) -> Result<HashSet<String>> {
     let items: Vec<&str> = inner
         .split(',')
         .map(|t| t.trim())
@@ -246,57 +256,67 @@ fn parse_key_set(inner: &str) -> HashSet<String> {
         .collect();
 
     if items.is_empty() {
-        panic!("empty set: '{}'", inner);
+        return Err(invalid_rule(format!("empty set: '{inner}'")));
     }
 
     let mut keys = HashSet::new();
     for item in items {
-        for k in expand_key(item) {
+        for k in expand_key(item)? {
             keys.insert(k);
         }
     }
-    keys
+    Ok(keys)
 }
 
 /// Expand a single key name through non-terminals (K → FUNC_KEYS, D → DIR_KEYS).
 ///
 /// Also handles chord keys like "CTRL+SPACE" → set containing both "CTRL" and "SPACE".
 /// 和弦的每一 part 都必须是文法键 (K ∪ D)；`CTRL+C` 这类含非文法键的和弦直接拒绝。
-fn expand_key(name: &str) -> Vec<String> {
+fn expand_key(name: &str) -> Result<Vec<String>> {
+    let name = name.trim();
+
     // Handle chord keys: "CTRL+SPACE" → ["CTRL", "SPACE"]
     if name.contains('+') {
         let parts: Vec<String> = name.split('+').map(|s| s.trim().to_uppercase()).collect();
-        if parts.len() > 1 && parts.iter().all(|p| !p.is_empty()) {
-            for p in &parts {
-                if !all_keys().contains(p.as_str()) {
-                    panic!("unknown chord key '{p}': must be a grammar key (K ∪ D)");
-                }
-            }
-            return parts;
+        if parts.iter().any(|p| p.is_empty()) {
+            return Err(invalid_rule(format!("empty chord part in '{name}'")));
         }
+        for p in &parts {
+            if !all_keys().contains(p.as_str()) {
+                return Err(invalid_rule(format!(
+                    "unknown chord key '{p}': must be a grammar key (K ∪ D)"
+                )));
+            }
+        }
+        return Ok(parts);
     }
 
     match name {
-        "K" => FUNC_KEYS.iter().map(|s| s.to_string()).collect(),
-        "D" => DIR_KEYS.iter().map(|s| s.to_string()).collect(),
-        other => {
-            if all_keys().contains(other) {
-                vec![other.to_string()]
-            } else {
-                panic!("unknown key '{}'", other);
-            }
-        }
+        "K" => Ok(FUNC_KEYS.iter().map(|s| s.to_string()).collect()),
+        "D" => Ok(DIR_KEYS.iter().map(|s| s.to_string()).collect()),
+        other if all_keys().contains(other) => Ok(vec![other.to_string()]),
+        other => Err(invalid_rule(format!("unknown key '{other}'"))),
     }
 }
 
 // ── Program parsing ──────────────────────────────────────────────────
 
-/// Parse all non-empty rule lines from `source` into a `Vec<Rule>`.
-pub fn parse_rules(source: &str) -> Vec<Rule> {
-    source
-        .lines()
-        .filter_map(|line| tokenize_rule(line))
-        .collect()
+/// Parse all rule lines from `source` into a `Vec<Rule>`.
+///
+/// Blank lines, comments, and grammar headers are skipped. A malformed rule
+/// returns an error carrying its 1-based line number.
+pub fn parse_rules(source: &str) -> Result<Vec<Rule>> {
+    let mut rules = Vec::new();
+    for (index, line) in source.lines().enumerate() {
+        match tokenize_rule(line) {
+            Ok(Some(rule)) => rules.push(rule),
+            Ok(None) => {}
+            Err(BehaviorError::Msg(message)) => {
+                return Err(BehaviorError::Msg(format!("line {}: {message}", index + 1)));
+            }
+        }
+    }
+    Ok(rules)
 }
 
 // ── Table & reachability ─────────────────────────────────────────────
@@ -359,7 +379,7 @@ pub fn reachability(table: &HashMap<Option<String>, Vec<Rule>>) -> HashSet<Strin
 
 /// Static validation: keys valid at parse time, action IDs in whitelist, modes reachable.
 pub fn check_program(source: &str, action_ids: Option<&HashSet<String>>) -> Result<CheckResult> {
-    let rules = parse_rules(source);
+    let rules = parse_rules(source)?;
     let table = build_table(&rules);
     let reachable = reachability(&table);
 
@@ -485,9 +505,31 @@ mod tests {
         keys.into_iter().map(String::from).collect()
     }
 
+    /// Parse one rule and fail with a useful message instead of a bare unwrap.
+    fn rule(line: &str) -> Rule {
+        match tokenize_rule(line) {
+            Ok(Some(rule)) => rule,
+            Ok(None) => panic!("expected a rule, got None: {line}"),
+            Err(err) => panic!("failed to parse {line:?}: {err}"),
+        }
+    }
+
+    fn parse_ok(src: &str) -> Vec<Rule> {
+        parse_rules(src).unwrap_or_else(|err| panic!("failed to parse {src:?}: {err}"))
+    }
+
+    fn next(seed: &mut u64) -> u64 {
+        let mut x = *seed;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *seed = x;
+        x
+    }
+
     #[test]
     fn tokenize_simple_rule() {
-        let r = tokenize_rule("0x01,ESC>0x02").unwrap();
+        let r = rule("0x01,ESC>0x02");
         assert_eq!(r.mode.as_deref(), Some("0x01"));
         assert_eq!(r.steps.len(), 1);
         assert_eq!(r.steps[0].keys, hs(["ESC"]));
@@ -498,7 +540,7 @@ mod tests {
 
     #[test]
     fn tokenize_no_mode_rule() {
-        let r = tokenize_rule("UP>0x03").unwrap();
+        let r = rule("UP>0x03");
         assert_eq!(r.mode, None);
         assert_eq!(r.steps[0].keys, hs(["UP"]));
         assert_eq!(r.action, "0x03");
@@ -506,7 +548,7 @@ mod tests {
 
     #[test]
     fn tokenize_block_step() {
-        let r = tokenize_rule("0x01,SPACE,{D},SPACE>0x09").unwrap();
+        let r = rule("0x01,SPACE,{D},SPACE>0x09");
         assert_eq!(r.steps.len(), 3);
         assert!(!r.steps[0].block);
         assert!(r.steps[1].block);
@@ -516,7 +558,7 @@ mod tests {
 
     #[test]
     fn tokenize_star_step() {
-        let r = tokenize_rule("0x01,ESC*>0x02").unwrap();
+        let r = rule("0x01,ESC*>0x02");
         assert!(r.steps[0].star);
         assert!(!r.steps[0].block);
         assert_eq!(r.steps[0].keys, hs(["ESC"]));
@@ -524,21 +566,27 @@ mod tests {
 
     #[test]
     fn tokenize_comment_skipped() {
-        assert!(tokenize_rule("(* comment *)").is_none());
-        assert!(tokenize_rule("").is_none());
+        assert!(tokenize_rule("(* comment *)").unwrap().is_none());
+        assert!(tokenize_rule("").unwrap().is_none());
     }
 
     #[test]
     fn tokenize_grammar_header_skipped() {
-        assert!(tokenize_rule("K = ESC | ALT").is_none());
-        assert!(tokenize_rule("D = UP | DOWN").is_none());
+        assert!(tokenize_rule("K = ESC | ALT").unwrap().is_none());
+        assert!(tokenize_rule("D = UP | DOWN").unwrap().is_none());
+    }
+
+    #[test]
+    fn lines_without_gt_are_ignored() {
+        // 与实现保持一致：没有 depth-0 '>' 的行不报错，直接跳过。
+        assert!(tokenize_rule("0x01,ESC").unwrap().is_none());
+        assert!(tokenize_rule("not a rule").unwrap().is_none());
     }
 
     #[test]
     fn parse_rules_multiline() {
         let src = "0x01,ESC>0x02\nUP>0x03\n(* skip *)\n";
-        let rules = parse_rules(src);
-        assert_eq!(rules.len(), 2);
+        assert_eq!(parse_ok(src).len(), 2);
     }
 
     #[test]
@@ -564,10 +612,22 @@ mod tests {
 
     #[test]
     fn multi_step_sequences_parse() {
-        let r = tokenize_rule("0x01,CTRL,CTRL>0x12").unwrap();
+        let r = rule("0x01,CTRL,CTRL>0x12");
         assert_eq!(r.steps.len(), 2);
         assert!(r.steps[0].keys.contains("CTRL"));
         assert!(r.steps[1].keys.contains("CTRL"));
+    }
+
+    #[test]
+    fn whitespace_around_steps_is_tolerated() {
+        // P0: 允许 token 之间出现空白，旧文件仍是合法子集。
+        let r = rule("0x01 , ESC , ALT + SPACE > 0x02");
+        assert_eq!(r.mode.as_deref(), Some("0x01"));
+        assert_eq!(r.steps.len(), 2);
+        assert_eq!(r.steps[0].keys, hs(["ESC"]));
+        assert_eq!(r.steps[1].keys, hs(["ALT", "SPACE"]));
+        assert!(r.steps[1].block);
+        assert_eq!(r.action, "0x02");
     }
 
     #[test]
@@ -589,15 +649,18 @@ mod tests {
 0x02,ENTER>0x0B\n\
 0x03,ENTER>0x13\n";
         for line in src.lines() {
-            assert!(tokenize_rule(line).is_some(), "规则不符合文法: {line}");
+            assert!(
+                tokenize_rule(line).unwrap().is_some(),
+                "规则不符合文法: {line}"
+            );
         }
     }
 
     #[test]
     fn grammar_chord_is_grammar_keys_only() {
         // 和弦只能是文法键组合: CTRL+SPACE / ALT+LEFT 合法
-        assert!(tokenize_rule("CTRL+SPACE>0x00").is_some());
-        assert!(tokenize_rule("ALT+LEFT>0x00").is_some());
+        assert!(tokenize_rule("CTRL+SPACE>0x00").unwrap().is_some());
+        assert!(tokenize_rule("ALT+LEFT>0x00").unwrap().is_some());
         assert!(is_known_key("CTRL+SPACE"));
         assert!(is_known_key("ALT+LEFT"));
 
@@ -605,20 +668,27 @@ mod tests {
         assert!(!is_known_key("CTRL+C"));
         assert!(!is_known_key("CTRL+S"));
         assert!(!is_known_key("ALT+H"));
-        assert!(std::panic::catch_unwind(|| tokenize_rule("CTRL+C>0x00")).is_err());
-        assert!(std::panic::catch_unwind(|| tokenize_rule("CTRL+S>0x15")).is_err());
+
+        // P0: 拒绝方式是 Err，不再 panic。
+        for bad in ["CTRL+C>0x00", "CTRL+S>0x15", "ALT+H>0x00"] {
+            let err = tokenize_rule(bad).unwrap_err().to_string();
+            assert!(err.contains("unknown chord key"), "{bad}: {err}");
+        }
     }
 
     #[test]
     fn repo_editor_ttoll_conforms() {
-        // 仓库根 editor.ttoll — 提供用户目录模板; 每一行必须能被 tokenize（注释返回 None 也是合法）
+        // 仓库根 editor.ttoll — 提供用户目录模板; 每一行必须能被 parse（注释返回 None 也是合法）
         let src = include_str!("../../editor.ttoll");
         for line in src.lines() {
             let s = line.trim();
             if s.is_empty() || s.starts_with("(*") {
                 continue;
             }
-            assert!(tokenize_rule(s).is_some(), "editor.ttoll 不符合文法: {line}");
+            assert!(
+                tokenize_rule(s).unwrap().is_some(),
+                "editor.ttoll 不符合文法: {line}"
+            );
         }
     }
 
@@ -634,7 +704,9 @@ mod tests {
             if s.is_empty() || s.starts_with("(*") {
                 continue;
             }
-            let rule = tokenize_rule(s).unwrap_or_else(|| panic!("tekl.ttoll 不符合文法: {line}"));
+            let rule = tokenize_rule(s)
+                .unwrap_or_else(|err| panic!("tekl.ttoll 不符合文法: {line}: {err}"))
+                .unwrap_or_else(|| panic!("tekl.ttoll 不符合文法: {line}"));
             assert!(
                 registry.is_registered(&rule.action),
                 "tekl.ttoll 指向未注册的 ID: {} ({line})",
@@ -647,26 +719,26 @@ mod tests {
 
     #[test]
     fn expand_k_nonterminal() {
-        let r = tokenize_rule("0x01,K>0x02").unwrap();
+        let r = rule("0x01,K>0x02");
         assert_eq!(r.steps[0].keys, hs(["ESC", "ALT", "CTRL", "SPACE", "ENTER"]));
     }
 
     #[test]
     fn expand_d_nonterminal() {
-        let r = tokenize_rule("0x01,D>0x02").unwrap();
+        let r = rule("0x01,D>0x02");
         assert_eq!(r.steps[0].keys, hs(["UP", "DOWN", "LEFT", "RIGHT"]));
     }
 
     #[test]
     fn build_table_groups() {
-        let rules = parse_rules("0x01,ESC>0x02\nUP>0x03\n");
+        let rules = parse_ok("0x01,ESC>0x02\nUP>0x03\n");
         let table = build_table(&rules);
         assert_eq!(table.len(), 2); // Some("0x01") and None
     }
 
     #[test]
     fn reachability_basic() {
-        let rules = parse_rules("0x01,ESC>0x02\n0x02,ESC>0x03\n");
+        let rules = parse_ok("0x01,ESC>0x02\n0x02,ESC>0x03\n");
         let table = build_table(&rules);
         let reachable = reachability(&table);
         assert!(reachable.contains("0x01"));
@@ -677,7 +749,7 @@ mod tests {
     #[test]
     fn reachability_unreachable_mode() {
         // 0x03 is never a target of a rule action
-        let rules = parse_rules("0x01,ESC>0x02\n0x03,ESC>0x01\n");
+        let rules = parse_ok("0x01,ESC>0x02\n0x03,ESC>0x01\n");
         let table = build_table(&rules);
         let reachable = reachability(&table);
         assert!(reachable.contains("0x01"));
@@ -709,26 +781,49 @@ mod tests {
 
     #[test]
     fn split_steps_nesting() {
-        let segs = split_steps("A,{B,C},D");
+        let segs = split_steps("A,{B,C},D").unwrap();
         assert_eq!(segs, vec!["A", "{B,C}", "D"]);
     }
 
     #[test]
-    #[should_panic(expected = "nested block")]
-    fn split_steps_nested_block() {
-        split_steps("{{A}}");
+    fn split_steps_nested_block_is_an_error() {
+        let err = split_steps("{{A}}").unwrap_err().to_string();
+        assert!(err.contains("nested block"), "{err}");
     }
 
     #[test]
-    #[should_panic(expected = "unbalanced block")]
-    fn split_steps_unbalanced() {
-        split_steps("{A");
+    fn split_steps_unbalanced_is_an_error() {
+        let err = split_steps("{A").unwrap_err().to_string();
+        assert!(err.contains("unbalanced block"), "{err}");
     }
 
     #[test]
-    #[should_panic(expected = "unknown key")]
-    fn expand_unknown_key() {
-        expand_key("NOTAKEY");
+    fn expand_unknown_key_is_an_error() {
+        let err = expand_key("NOTAKEY").unwrap_err().to_string();
+        assert!(err.contains("unknown key"), "{err}");
+    }
+
+    #[test]
+    fn malformed_steps_are_errors() {
+        for (bad, needle) in [
+            ("0x0A,ESC>0x02", "invalid mode"),
+            ("0x01,{ESC}x>0x02", "malformed block"),
+            ("0x01,{}>0x02", "empty set"),
+            ("0x01,CTRL+>0x02", "empty chord part"),
+            ("0x01,NOTAKEY>0x02", "unknown key"),
+        ] {
+            let err = tokenize_rule(bad).unwrap_err().to_string();
+            assert!(err.contains(needle), "{bad}: expected '{needle}', got: {err}");
+        }
+    }
+
+    #[test]
+    fn parse_rules_reports_line_numbers() {
+        let err = parse_rules("0x01,ESC>0x02\n0x01,NOTAKEY>0x03\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("line 2"), "{err}");
+        assert!(err.contains("unknown key 'NOTAKEY'"), "{err}");
     }
 
     #[test]
@@ -742,8 +837,7 @@ mod tests {
     #[test]
     fn dispatch_mode_specific() {
         let src = "0x01,ESC>0x02\n0x01,UP>0x03\n";
-        let rules = parse_rules(src);
-        let table = build_table(&rules);
+        let table = build_table(&parse_ok(src));
         assert_eq!(dispatch(&table, "0x01", "ESC"), Some("0x02".into()));
         assert_eq!(dispatch(&table, "0x01", "UP"), Some("0x03".into()));
     }
@@ -751,8 +845,7 @@ mod tests {
     #[test]
     fn dispatch_global_fallback() {
         let src = "ESC>0x01\n0x01,UP>0x02\n";
-        let rules = parse_rules(src);
-        let table = build_table(&rules);
+        let table = build_table(&parse_ok(src));
         assert_eq!(dispatch(&table, "0x01", "ESC"), Some("0x01".into()));
         assert_eq!(dispatch(&table, "0x01", "UP"), Some("0x02".into()));
     }
@@ -760,24 +853,21 @@ mod tests {
     #[test]
     fn dispatch_no_match() {
         let src = "0x01,ESC>0x02\n";
-        let rules = parse_rules(src);
-        let table = build_table(&rules);
+        let table = build_table(&parse_ok(src));
         assert_eq!(dispatch(&table, "0x01", "F1"), None);
     }
 
     #[test]
     fn dispatch_mode_specific_over_global() {
         let src = "ESC>0x01\n0x01,ESC>0x02\n";
-        let rules = parse_rules(src);
-        let table = build_table(&rules);
+        let table = build_table(&parse_ok(src));
         assert_eq!(dispatch(&table, "0x01", "ESC"), Some("0x02".into()));
     }
 
     #[test]
     fn dispatch_chord_match() {
         let src = "0x01,{CTRL,SPACE}>0x09\n";
-        let rules = parse_rules(src);
-        let table = build_table(&rules);
+        let table = build_table(&parse_ok(src));
         let chord = vec!["CTRL".into(), "SPACE".into()];
         assert_eq!(dispatch_chord(&table, "0x01", &chord), Some("0x09".into()));
     }
@@ -785,8 +875,7 @@ mod tests {
     #[test]
     fn dispatch_chord_no_match() {
         let src = "0x01,{CTRL,SPACE}>0x09\n";
-        let rules = parse_rules(src);
-        let table = build_table(&rules);
+        let table = build_table(&parse_ok(src));
         let chord = vec!["CTRL".into(), "ALT".into()];
         assert_eq!(dispatch_chord(&table, "0x01", &chord), None);
     }
@@ -799,5 +888,26 @@ mod tests {
         assert!(!is_hex_mode("0x1"));
         assert!(!is_hex_mode("0x123"));
         assert!(!is_hex_mode("hello"));
+    }
+
+    #[test]
+    fn parser_never_panics_on_random_input() {
+        // P0 保证：任意输入要么 Ok，要么 Err，不允许 panic。
+        let alphabet: &[char] = &[
+            '0', '1', '2', '3', '4', 'A', 'B', 'C', 'D', 'E', 'F', 'K', 'L', 'M', 'P', 'S',
+            'T', 'U', 'X', 'a', 'x', '+', '{', '}', ',', '>', '*', ' ', '\t', '(', ')', '[',
+            ']', '"', '\'', '#', '\n', '\r', '-', '_', '中', 'é',
+        ];
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..4000 {
+            let len = (next(&mut seed) % 32) as usize;
+            let mut s = String::with_capacity(len);
+            for _ in 0..len {
+                s.push(alphabet[(next(&mut seed) as usize) % alphabet.len()]);
+            }
+            // 不关心结果，只要求不 panic。
+            let _ = parse_rules(&s);
+            let _ = parse_rules(&s.to_uppercase());
+        }
     }
 }

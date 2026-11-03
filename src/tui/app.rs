@@ -130,7 +130,8 @@ impl App {
         // Load tekl.ttoll dispatch rules
         let ttoll_path = crate::lib::user_dir::user_root().join("tekl.ttoll");
         let ttoll_source = fs::read_to_string(&ttoll_path).unwrap_or_default();
-        let rules = behavior::parse_rules(&ttoll_source);
+        let rules = behavior::parse_rules(&ttoll_source)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", ttoll_path.display()))?;
         let ttoll_table = behavior::build_table(&rules);
 
         // Build keyboard TUI ID registry — from built-in tui/*.rhai + user overrides

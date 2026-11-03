@@ -350,7 +350,7 @@ pub struct Global {
 pub enum GlobalValue {
     Number(i64),
     Ident(String),
-    Bool(bool),
+    Flag,
 }
 
 impl Global {
@@ -358,8 +358,7 @@ impl Global {
     /// survive a TUI save/load round trip.
     pub fn to_source(&self) -> String {
         match &self.value {
-            GlobalValue::Bool(true) => self.key.clone(),
-            GlobalValue::Bool(false) => format!("{} = false", self.key),
+            GlobalValue::Flag => self.key.clone(),
             GlobalValue::Number(n) => format!("{} = {}", self.key, n),
             GlobalValue::Ident(s) => format!("{} = {}", self.key, s),
         }
@@ -483,7 +482,7 @@ impl Parser {
         if key == "reload" {
             return Ok(Global {
                 key: "reload".to_string(),
-                value: GlobalValue::Bool(true),
+                value: GlobalValue::Flag,
             });
         }
 
@@ -1036,7 +1035,28 @@ mod tests {
         let result = parse("reload\nESC").unwrap();
         assert_eq!(result.globals.len(), 1);
         assert_eq!(result.globals[0].key, "reload");
-        assert!(matches!(result.globals[0].value, GlobalValue::Bool(true)));
+        assert!(matches!(result.globals[0].value, GlobalValue::Flag));
+    }
+
+    #[test]
+    fn global_to_source_roundtrips() {
+        // to_source 的每个输出都必须能被 parse 还原，且 Global 相等。
+        let source = "height = 40\ntheme = dark\nlayout = extra\nreload\nESC";
+        let result = parse(source).unwrap();
+        for global in &result.globals {
+            let serialized = global.to_source();
+            let reparsed = parse(&serialized)
+                .unwrap_or_else(|e| panic!("{serialized:?} is not parseable: {e}"));
+            assert_eq!(reparsed.globals.len(), 1, "{serialized:?}");
+            let other = &reparsed.globals[0];
+            assert_eq!(global.key, other.key);
+            match (&global.value, &other.value) {
+                (GlobalValue::Number(a), GlobalValue::Number(b)) => assert_eq!(a, b),
+                (GlobalValue::Ident(a), GlobalValue::Ident(b)) => assert_eq!(a, b),
+                (GlobalValue::Flag, GlobalValue::Flag) => {}
+                (a, b) => panic!("{serialized:?}: {a:?} != {b:?}"),
+            }
+        }
     }
 
     #[test]
@@ -1109,6 +1129,35 @@ mod tests {
                 src.contains(&format!("'{key}'")),
                 "ebnf/tekl.ebnf 缺少按键 '{key}'"
             );
+        }
+    }
+
+    #[test]
+    fn parser_never_panics_on_random_input() {
+        // P0 保证：任意输入要么 Ok，要么 Err，不允许 panic。
+        fn next(seed: &mut u64) -> u64 {
+            let mut x = *seed;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            *seed = x;
+            x
+        }
+
+        let alphabet: &[char] = &[
+            '0', '1', '2', '9', 'A', 'B', 'C', 'E', 'F', 'K', 'S', 'T', 'U', 'X', 'a', 'e',
+            'f', 'h', 's', 't', 'x', '\'', '"', '#', ';', '.', '(', ')', ':', '=', '+', '-',
+            '_', ' ', '\t', '\n', '\r', '中', 'é',
+        ];
+        let mut seed = 0xDEAD_BEEF_CAFE_1234u64;
+        for _ in 0..4000 {
+            let len = (next(&mut seed) % 40) as usize;
+            let mut s = String::with_capacity(len);
+            for _ in 0..len {
+                s.push(alphabet[(next(&mut seed) as usize) % alphabet.len()]);
+            }
+            // 不关心结果，只要求不 panic。
+            let _ = parse(&s);
         }
     }
 

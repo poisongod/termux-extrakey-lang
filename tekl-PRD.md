@@ -69,7 +69,7 @@ P = { G | ';' | Row } [ M { G | M } ] ;
 
 ```
 (* 行式语法：空行、'(*' 开头的行、'K = …' 标题行、无 '>' 的行均整行忽略 *)
-(* LHS 内部不能有空白（'0x01, ESC' 非法）；和弦与 '{}' 内各项会 trim *)
+(* LHS 各步骤/前缀/和弦/集合项会 trim；文法错误返回带行号的诊断，不 panic *)
 
 M = '0x01' | '0x02' | '0x03' ;
 K = 'ESC' | 'ALT' | 'CTRL' | 'SPACE' | 'ENTER' ;
@@ -242,6 +242,8 @@ tekl edit <file>        # .tekl → 布局 TUI；.ttoll → ttoll 编辑器（�
 tekl check <file>       # 只校验，不写盘、不 reload
 tekl reload <file>      # 校验 → 写 ~/.termux/termux.tekl → termux-reload-settings
 ```
+
+`--strict` 把警告当作错误：只打印警告并以非零退出；`reload --strict` 在写盘前失败。
 
 ### 7.2 两个消费者
 

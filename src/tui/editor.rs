@@ -77,7 +77,8 @@ pub fn run_editor(file: &Option<String>) -> anyhow::Result<()> {
     // Load editor.ttoll dispatch rules
     let ttoll_path = user_dir::user_root().join("editor.ttoll");
     let ttoll_source = fs::read_to_string(&ttoll_path).unwrap_or_default();
-    let rules = behavior::parse_rules(&ttoll_source);
+    let rules = behavior::parse_rules(&ttoll_source)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", ttoll_path.display()))?;
     let ttoll_table = behavior::build_table(&rules);
 
     crossterm::terminal::enable_raw_mode()?;
@@ -720,8 +721,8 @@ fn validate_ttoll(content: &str) -> Option<String> {
         if line.is_empty() || line.starts_with("(*") {
             continue;
         }
-        if behavior::tokenize_rule(line).is_none() {
-            return Some(format!("行 {}: 语法错误", i + 1));
+        if let Err(err) = behavior::tokenize_rule(line) {
+            return Some(format!("行 {}: {err}", i + 1));
         }
     }
     None

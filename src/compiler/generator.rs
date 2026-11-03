@@ -12,15 +12,17 @@ use crate::lib;
 /// When the source is already the target file (the common `tekl reload
 /// ~/.termux/termux.tekl` case), it is validated but left untouched so comments and
 /// formatting survive.
-pub fn run_compile(file: &str, output: Option<&str>, reload: bool) -> anyhow::Result<()> {
+pub fn run_compile(
+    file: &str,
+    output: Option<&str>,
+    reload: bool,
+    strict: bool,
+) -> anyhow::Result<()> {
     let source_path = PathBuf::from(file);
     let source = fs::read_to_string(&source_path)?;
 
     let result = lib::keys::compile_source(&source)?;
-
-    for w in &result.warnings {
-        eprintln!("warning: {w}");
-    }
+    report_warnings(&result.warnings, strict)?;
 
     let extra_keys_path = resolve_extra_keys_path(output);
 
@@ -44,15 +46,23 @@ pub fn run_compile(file: &str, output: Option<&str>, reload: bool) -> anyhow::Re
 }
 
 /// Validate a tekl file and print its warnings. Writes nothing and does not reload.
-pub fn check(file: &str) -> anyhow::Result<()> {
+pub fn check(file: &str, strict: bool) -> anyhow::Result<()> {
     let source = fs::read_to_string(file)?;
     let result = lib::keys::compile_source(&source)?;
-
-    for w in &result.warnings {
-        eprintln!("warning: {w}");
-    }
+    report_warnings(&result.warnings, strict)?;
 
     eprintln!("ok: {} ({} rows)", file, result.rows.len());
+    Ok(())
+}
+
+/// Print warnings, and in strict mode turn them into a hard failure.
+fn report_warnings(warnings: &[String], strict: bool) -> anyhow::Result<()> {
+    for w in warnings {
+        eprintln!("warning: {w}");
+    }
+    if strict && !warnings.is_empty() {
+        anyhow::bail!("strict: treated {} warning(s) as errors", warnings.len());
+    }
     Ok(())
 }
 
@@ -97,7 +107,7 @@ mod tests {
         let original = "# my layout\nESC;\n# trailing comment\n";
         fs::write(&path, original).unwrap();
 
-        run_compile(path.to_str().unwrap(), Some(path.to_str().unwrap()), false).unwrap();
+        run_compile(path.to_str().unwrap(), Some(path.to_str().unwrap()), false, false).unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
         assert!(!path.with_extension("tekl.bak").exists());
@@ -111,7 +121,7 @@ mod tests {
         let dst = dir.join("out").join("termux.tekl");
         fs::write(&src, "# comment\nESC ;\n").unwrap();
 
-        run_compile(src.to_str().unwrap(), Some(dst.to_str().unwrap()), false).unwrap();
+        run_compile(src.to_str().unwrap(), Some(dst.to_str().unwrap()), false, false).unwrap();
 
         assert_eq!(fs::read_to_string(&dst).unwrap(), "ESC;\n");
         let _ = fs::remove_dir_all(&dir);
@@ -124,7 +134,7 @@ mod tests {
         let original = "# keep me\nESC; a b;\n";
         fs::write(&src, original).unwrap();
 
-        check(src.to_str().unwrap()).unwrap();
+        check(src.to_str().unwrap(), false).unwrap();
 
         assert_eq!(fs::read_to_string(&src).unwrap(), original);
         assert!(!src.with_extension("tekl.bak").exists());
@@ -137,12 +147,32 @@ mod tests {
         let src = dir.join("broken.tekl");
         fs::write(&src, "ESC(\n").unwrap();
 
-        let err = check(src.to_str().unwrap()).unwrap_err().to_string();
+        let err = check(src.to_str().unwrap(), false).unwrap_err().to_string();
 
         assert!(err.contains("line 1"), "{err}");
         assert!(err.contains("column 5"), "{err}");
         // The `keys:` prefix must appear exactly once, not "keys: keys:".
         assert_eq!(err.matches("keys:").count(), 1, "{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strict_turns_warnings_into_errors_before_writing() {
+        let dir = temp_dir("strict");
+        let src = dir.join("layout.tekl");
+        // ESC alone is valid but warns about missing DRAWER/KEYBOARD.
+        fs::write(&src, "ESC;\n").unwrap();
+
+        let err = check(src.to_str().unwrap(), true).unwrap_err().to_string();
+        assert!(err.contains("strict"), "{err}");
+
+        let dst = dir.join("out.tekl");
+        fs::write(&dst, "old\n").unwrap();
+        let err = run_compile(src.to_str().unwrap(), Some(dst.to_str().unwrap()), false, true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("strict"), "{err}");
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "old\n");
         let _ = fs::remove_dir_all(&dir);
     }
 }

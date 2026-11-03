@@ -96,7 +96,8 @@ tekl                              # 布局 TUI，编辑 ~/.termux/termux.tekl（
 tekl edit <file>                  # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错
 tekl reload <file> [--no-reload]  # 编译 .tekl → ~/.termux/termux.tekl → termux-reload-settings
 tekl reload <file> --output out.tekl  # 写到指定路径（不覆盖默认布局）
-tekl check <file>                 # 只校验语法与警告，不写盘、不 reload
+tekl reload <file> --strict       # 有警告时不写盘、不 reload，按错误退出
+tekl check <file> [--strict]      # 只校验语法与警告，不写盘、不 reload
 ```
 
 ### 布局 TUI（`tekl` / `tekl edit keys.tekl`）
@@ -196,6 +197,8 @@ CTRL+SPACE>0x40      # 和弦可作全局规则（无模式前缀时任意模式
 - 和弦 `CTRL+x` / `ALT+x` 的 x **必须也是文法键**：`CTRL+SPACE`、`ALT+LEFT` 合法；
   `CTRL+C`、`CTRL+S` 等字符级和弦 **非法**。
 - 字符键 `i`、`Enter` 打引号形式均不产生分派候选。
+- LHS 的步骤、模式前缀、和弦各部分与 `{}` 内各项都会 trim；解析失败返回带行号的
+  诊断，不再 panic，编辑器会在状态栏显示具体行号与原因。
 
 改变文法 = 破坏性变更，须同步 `behavior.rs`、全部 `.ttoll`、测试与
 `ebnf/*.ebnf`（`.ebnf.txt` 是指向同名 `.ebnf` 的符号链接）。
@@ -339,6 +342,9 @@ ttoll 编辑器（0x00–0x17 共 24 个）：
 
 `tekl check <file>` 走同一套 `compile_source`，只打印警告与 `ok: <file> (<n> rows)`，
 不写盘、不调用 `termux-reload-settings`，适合编辑器保存钩子与 CI。
+
+`--strict` 把警告当作错误：先打印全部警告，再以非零退出。`reload --strict` 在写盘前
+失败，因此不会产生半成品布局；适合 CI 和提交前检查。
 
 ## 架构与契约
 

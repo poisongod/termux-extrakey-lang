@@ -41,7 +41,8 @@ tekl reload <file> [--no-reload]
                               # 编译 .tekl → 原子写 ~/.termux/termux.tekl → termux-reload-settings
 tekl reload <file> --output <path>
                               # 写到指定路径；源文件即目标文件时只校验不重写
-tekl check <file>             # 只校验并打印警告，不写盘、不 reload
+tekl reload <file> --strict   # 有警告时不写盘、不 reload，按错误退出
+tekl check <file> [--strict]  # 只校验并打印警告，不写盘、不 reload
 git tag vX.Y.Z && git push origin vX.Y.Z
                               # 触发 Release：NDK 交叉编译 aarch64/armv7 → 打包 → 发布
 ```
@@ -57,6 +58,9 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 - **模式号两套语义**：`0x01/0x02/0x03` 在布局 TUI 是 Normal/Edit/Popup（`Mode` in app.rs），
   在 ttoll 编辑器是 Normal/Insert/Command（`Mode` in editor.rs），互不共享。
 - `id.txt` 只是人工速查表；ID 的 `desc` 真相源是各 `.rhai` 文件。
+- **ttoll 解析返回 `Result`**：`tokenize_rule`/`parse_rules` 遇到非法规则返回带行号的
+  `BehaviorError`，不再 panic；LHS 的步骤、模式前缀、和弦与 `{}` 内容都会 trim。
+  TUI 启动时若 `tekl.ttoll`/`editor.ttoll` 非法，会以清晰错误退出，而不是崩溃。
 
 ## 关键不变量
 

@@ -25,6 +25,9 @@ enum Commands {
     Check {
         /// Source .tekl file
         file: String,
+        /// Treat warnings as errors (non-zero exit)
+        #[arg(long)]
+        strict: bool,
     },
     /// Compile .tekl file and write ~/.termux/termux.tekl
     Reload {
@@ -36,6 +39,9 @@ enum Commands {
         /// Reload termux settings after write
         #[arg(long)]
         no_reload: bool,
+        /// Treat warnings as errors (do not write or reload)
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -68,9 +74,9 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Some(Commands::Check { file }) => compiler::generator::check(&file),
-        Some(Commands::Reload { file, output, no_reload }) => {
-            compiler::generator::run_compile(&file, output.as_deref(), !no_reload)
+        Some(Commands::Check { file, strict }) => compiler::generator::check(&file, strict),
+        Some(Commands::Reload { file, output, no_reload, strict }) => {
+            compiler::generator::run_compile(&file, output.as_deref(), !no_reload, strict)
         }
     }
 }
