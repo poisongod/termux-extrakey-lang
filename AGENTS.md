@@ -13,7 +13,7 @@ tekl — Termux 键盘布局 DSL + TUI 工具链。**Rust Core + Rhai ID 插件*
   - `keys.rs` tekl 词法/语法/编译/打印（round-trip 契约）
   - `behavior.rs` ttoll 解析 + `dispatch`/`dispatch_chord` + 静态检查
   - `id.rs` `IdRegistry`：内置 `include_str!` 清单 + 用户 `~/.termux/id/` 扫描
-  - `check.rs` `validate.rs` `json_dsl.rs` `keyset.rs` `user_dir.rs`
+  - `keyset.rs` `user_dir.rs`（JSON 中间层 `json_dsl.rs` / `validate.rs` / `check.rs` 已删除）
 - `src/tui/` — `app.rs`（布局 TUI）+ `editor.rs`（双分区行为编辑器）+ `preview.rs`（键盘预览渲染）
 - `src/id/{tui,editor}/<ID>.rhai` — 内置插件，**一 ID 一文件，文件名即 ID**
 - `src/worker/script_runtime.rs` — Rhai 引擎封装 `ScriptHost{engine, lib}`；消费者把状态包进
@@ -36,7 +36,7 @@ cp target/release/tekl $PREFIX/bin/tekl                 # Termux 安装
 tekl                          # 布局 TUI，编辑 ~/.termux/termux.tekl（首次运行自动生成）
 tekl edit <file>              # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错退出
 tekl reload <file> [--no-reload]
-                              # 编译 .tekl → termux.properties 的 extra-keys（tekl 文本，非 JSON）→ termux-reload-settings
+                              # 编译 .tekl → 原子写 ~/.termux/termux.tekl → termux-reload-settings
 git tag vX.Y.Z && git push origin vX.Y.Z
                               # 触发 Release：NDK 交叉编译 aarch64/armv7 → 打包 → 发布
 ```

@@ -9,7 +9,7 @@ tekl 完全替代 termux.properties，成为 Termux 的唯一配置文件。
 
 | 受众 | 面向 | 工具 | 产出 |
 |---|---|---|---|
-| 普通用户 | 键盘布局的日常编辑 | tekl DSL + 布局 TUI | `~/.termux/termux.tekl` → 编译 → `termux.properties` |
+| 普通用户 | 键盘布局的日常编辑 | tekl DSL + 布局 TUI | `~/.termux/termux.tekl`（App 直接解析，无中间属性） |
 | 插件开发者 | 行为定制与新操作扩展 | ttoll 规则 + `.rhai` ID 插件 | `*.ttoll`（按键→ID 接线）+ `*.rhai`（ID→逻辑实现） |
 
 普通用户不需要接触 ttoll 与 .rhai；插件开发者不需要理解 Termux 属性细节。

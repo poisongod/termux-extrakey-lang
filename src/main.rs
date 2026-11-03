@@ -21,7 +21,7 @@ enum Commands {
         /// File to edit: .ttoll → behavior editor, .tekl → keyboard TUI
         file: String,
     },
-    /// Compile .tekl file and update termux.properties
+    /// Compile .tekl file and write ~/.termux/termux.tekl
     Reload {
         /// Source .tekl file
         file: String,

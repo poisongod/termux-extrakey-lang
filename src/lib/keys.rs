@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use thiserror::Error;
 
@@ -349,34 +349,6 @@ pub enum GlobalValue {
     Bool(bool),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum JsonEntry {
-    Simple(String),
-    Object(HashMap<String, JsonValue>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum JsonValue {
-    Str(String),
-    Num(i64),
-    Bool(bool),
-    Null,
-    Object(HashMap<String, JsonValue>),
-    Array(Vec<JsonValue>),
-}
-
-impl JsonValue {
-    pub fn is_truthy(&self) -> bool {
-        match self {
-            JsonValue::Bool(b) => *b,
-            JsonValue::Null => false,
-            JsonValue::Num(n) => *n != 0,
-            JsonValue::Str(s) => !s.is_empty(),
-            _ => true,
-        }
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════
 // Parser
 // ═══════════════════════════════════════════════════════════════════
@@ -695,38 +667,23 @@ fn collect_combo_keys(node: &AstNode, out: &mut Vec<String>) -> Result<(), Compi
     }
 }
 
-fn compile_atom(node: &AstNode) -> Result<JsonValue, CompileError> {
-    match node {
-        AstNode::Key { .. } => Ok(JsonValue::Str(key_name(node)?)),
 
-        AstNode::Label { node: inner, label } => {
-            let base = compile_atom(inner)?;
-            match &base {
-                JsonValue::Str(s) => {
-                    let mut m = HashMap::new();
-                    m.insert("key".to_string(), JsonValue::Str(s.clone()));
-                    m.insert("display".to_string(), JsonValue::Str(label.clone()));
-                    Ok(JsonValue::Object(m))
-                }
-                JsonValue::Object(obj) => {
-                    if obj.contains_key("key") || obj.contains_key("macro") {
-                        let mut m = obj.clone();
-                        m.insert("display".to_string(), JsonValue::Str(label.clone()));
-                        Ok(JsonValue::Object(m))
-                    } else {
-                        Err(CompileError::new(format!(
-                            "cannot label '{}'",
-                            json_value_to_string(&base)
-                        )))
-                    }
-                }
-                _ => Err(CompileError::new(format!(
-                    "cannot label '{}'",
-                    json_value_to_string(&base)
-                ))),
-            }
+/// Validates a parsed matrix using rules that are not expressible in the grammar.
+///
+/// - a combo must contain the modifier plus at least one key, and only plain keys
+/// - a popup may not be nested
+pub fn validate_compiled_rows(rows: &[Vec<AstNode>]) -> Result<(), CompileError> {
+    for row in rows {
+        for entry in row {
+            validate_entry(entry)?;
         }
+    }
+    Ok(())
+}
 
+fn validate_entry(node: &AstNode) -> Result<(), CompileError> {
+    match node {
+        AstNode::Key { .. } => Ok(()),
         AstNode::Combo { node, inner } => {
             let mut keys = Vec::new();
             collect_combo_keys(node, &mut keys)?;
@@ -737,135 +694,31 @@ fn compile_atom(node: &AstNode) -> Result<JsonValue, CompileError> {
                     keys.join(" ")
                 )));
             }
-            let mut m = HashMap::new();
-            m.insert("macro".to_string(), JsonValue::Str(keys.join(" ")));
-            Ok(JsonValue::Object(m))
+            Ok(())
         }
-
-        AstNode::Popup { .. } => Err(CompileError::new("popup is not valid inside '()'")),
-    }
-}
-
-fn compile_entry(node: &AstNode) -> Result<JsonValue, CompileError> {
-    if !matches!(node, AstNode::Popup { .. }) {
-        return compile_atom(node);
-    }
-
-    if let AstNode::Popup { main, popup_node } = node {
-        let main_val = compile_atom(main)?;
-        let popup_val = compile_atom(popup_node)?;
-
-        match &main_val {
-            JsonValue::Str(s) => {
-                let mut m = HashMap::new();
-                m.insert("key".to_string(), JsonValue::Str(s.clone()));
-                m.insert("popup".to_string(), popup_val);
-                Ok(JsonValue::Object(m))
-            }
-            JsonValue::Object(obj) => {
-                if !obj.contains_key("popup") {
-                    let mut m = obj.clone();
-                    m.insert("popup".to_string(), popup_val);
-                    Ok(JsonValue::Object(m))
-                } else {
-                    Err(CompileError::new(format!(
-                        "'{}': popup cannot be nested or followed by a key",
-                        json_value_to_string(&main_val)
-                    )))
-                }
-            }
-            _ => Err(CompileError::new(format!(
-                "'{}': popup cannot be nested or followed by a key",
-                json_value_to_string(&main_val)
-            ))),
-        }
-    } else {
-        unreachable!()
-    }
-}
-
-pub fn compile(rows: &[Vec<AstNode>]) -> Result<Vec<Vec<JsonValue>>, CompileError> {
-    rows.iter()
-        .map(|row| row.iter().map(compile_entry).collect())
-        .collect()
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Compiler validation (Termux-specific JSON rules)
-// ═══════════════════════════════════════════════════════════════════
-
-pub fn validate_termux_json(json: &[Vec<JsonValue>]) -> Result<(), CompileError> {
-    for row in json {
-        for key in row {
-            match key {
-                JsonValue::Str(_) => continue,
-                JsonValue::Object(obj) => {
-                    let has_key = obj.contains_key("key");
-                    let has_macro = obj.contains_key("macro");
-                    let has_display = obj.contains_key("display");
-
-                    if has_key && has_macro {
-                        return Err(CompileError::new(format!(
-                            "entry {}: Termux rejects keys with both 'key' and 'macro'",
-                            json_value_to_string(&JsonValue::Object(obj.clone()))
-                        )));
-                    }
-                    if !has_key && !has_macro && !has_display {
-                        return Err(CompileError::new(format!(
-                            "entry {}: Termux requires 'key' or 'macro'",
-                            json_value_to_string(&JsonValue::Object(obj.clone()))
-                        )));
-                    }
-                }
-                _ => {
-                    return Err(CompileError::new(format!(
-                        "invalid extra key entry: {}",
-                        json_value_to_string(key)
-                    )));
-                }
-            }
+        AstNode::Label { node, .. } => validate_entry(node),
+        AstNode::Popup { main, popup_node } => {
+            validate_entry(main)?;
+            validate_entry(popup_node)
         }
     }
-    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Compiler warnings (non-fatal, yellow, Chinese)
+// Compiler warnings (non-fatal, Chinese)
 // ═══════════════════════════════════════════════════════════════════
 
-pub fn collect_warnings(json: &[Vec<JsonValue>]) -> Vec<String> {
+pub fn collect_warnings(rows: &[Vec<AstNode>]) -> Vec<String> {
     let mut warnings = Vec::new();
 
-    // Empty field values
-    for (r, row) in json.iter().enumerate() {
+    for (r, row) in rows.iter().enumerate() {
         for (c, entry) in row.iter().enumerate() {
-            if let JsonValue::Object(obj) = entry {
-                for (k, v) in obj {
-                    if matches!(v, JsonValue::Str(s) if s.is_empty()) {
-                        warnings.push(format!(
-                            "第 {} 键盘行第 {} 键: '{k}' 的值为空",
-                            r + 1,
-                            c + 1,
-                        ));
-                    }
-                }
-                if let Some(JsonValue::Object(popup)) = obj.get("popup") {
-                    for (k, v) in popup {
-                        if matches!(v, JsonValue::Str(s) if s.is_empty()) {
-                            warnings.push(format!(
-                                "第 {} 键盘行第 {} 键的 popup: '{k}' 的值为空",
-                                r + 1,
-                                c + 1,
-                            ));
-                        }
-                    }
-                }
-            }
+            collect_empty_warnings(entry, r + 1, c + 1, false, &mut warnings);
         }
     }
 
     // Uneven row lengths
-    let lengths: Vec<usize> = json.iter().map(|row| row.len()).collect();
+    let lengths: Vec<usize> = rows.iter().map(|row| row.len()).collect();
     if lengths.windows(2).any(|w| w[0] != w[1]) {
         let parts: Vec<String> = lengths
             .iter()
@@ -876,117 +729,75 @@ pub fn collect_warnings(json: &[Vec<JsonValue>]) -> Vec<String> {
     }
 
     // Missing DRAWER / KEYBOARD
-    fn has_key(json: &[Vec<JsonValue>], name: &str) -> bool {
-        for row in json {
-            for entry in row {
-                match entry {
-                    JsonValue::Str(s) if s == name => return true,
-                    JsonValue::Object(obj) => {
-                        if obj.get("key").map(|v| v == &JsonValue::Str(name.to_string())).unwrap_or(false) {
-                            return true;
-                        }
-                        if obj.get("popup").map(|v| v == &JsonValue::Str(name.to_string())).unwrap_or(false) {
-                            return true;
-                        }
-                        if let Some(JsonValue::Object(popup_obj)) = obj.get("popup") {
-                            if popup_obj.get("key").map(|v| v == &JsonValue::Str(name.to_string())).unwrap_or(false) {
-                                return true;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
+    let mut names = Vec::new();
+    for row in rows {
+        for entry in row {
+            collect_names(entry, &mut names);
         }
-        false
     }
 
-    if !has_key(json, "DRAWER") {
+    if !names.iter().any(|name| name == "DRAWER") {
         warnings.push("键盘方案中未找到应用抽屉键 (DRAWER)".to_string());
     }
-    if !has_key(json, "KEYBOARD") {
+    if !names.iter().any(|name| name == "KEYBOARD") {
         warnings.push("键盘方案中未找到键盘切换键 (KEYBOARD)".to_string());
     }
 
     warnings
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Stringify (DSL → Android-compatible JSON dialect)
-// ═══════════════════════════════════════════════════════════════════
+fn collect_empty_warnings(
+    node: &AstNode,
+    row: usize,
+    column: usize,
+    in_popup: bool,
+    warnings: &mut Vec<String>,
+) {
+    let suffix = if in_popup { "的 popup" } else { "" };
 
-fn quote_string(s: &str) -> String {
-    let mut out = String::from('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            '\x08' => out.push_str("\\b"),
-            '\x0C' => out.push_str("\\f"),
-            c if c < '\x20' => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn is_bare_token(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
-        _ => return false,
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-}
-
-fn is_keyword(s: &str) -> bool {
-    matches!(s, "true" | "false" | "null")
-}
-
-fn stringify_value(v: &JsonValue) -> String {
-    match v {
-        JsonValue::Str(s) => {
-            if !s.is_empty() && is_bare_token(s) && !is_keyword(s) {
-                s.clone()
-            } else {
-                quote_string(s)
+    match node {
+        AstNode::Key { key, kind } => {
+            if *kind == KeyKind::Literal && key.is_empty() {
+                warnings.push(format!(
+                    "第 {row} 键盘行第 {column} 键{suffix}: 'key' 的值为空"
+                ));
             }
         }
-        JsonValue::Num(n) => n.to_string(),
-        JsonValue::Bool(b) => b.to_string(),
-        JsonValue::Null => "null".to_string(),
-        JsonValue::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(stringify_value).collect();
-            format!("[{}]", items.join(", "))
+        AstNode::Label { node, label } => {
+            if label.is_empty() {
+                warnings.push(format!(
+                    "第 {row} 键盘行第 {column} 键{suffix}: 'display' 的值为空"
+                ));
+            }
+            collect_empty_warnings(node, row, column, in_popup, warnings);
         }
-        JsonValue::Object(obj) => stringify_object(obj),
+        AstNode::Combo { .. } => {}
+        AstNode::Popup { main, popup_node } => {
+            collect_empty_warnings(main, row, column, in_popup, warnings);
+            collect_empty_warnings(popup_node, row, column, true, warnings);
+        }
     }
 }
 
-fn stringify_object(obj: &HashMap<String, JsonValue>) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    for (k, v) in obj {
-        parts.push(format!("{}: {}", k, stringify_value(v)));
+/// Collects the normalized key names of an entry (including its popup) so the
+/// DRAWER/KEYBOARD presence warnings do not need a JSON representation.
+fn collect_names(node: &AstNode, out: &mut Vec<String>) {
+    match node {
+        AstNode::Key { .. } => {
+            if let Ok(name) = key_name(node) {
+                out.push(name);
+            }
+        }
+        AstNode::Label { node, .. } => collect_names(node, out),
+        AstNode::Combo { node, inner } => {
+            collect_names(node, out);
+            collect_names(inner, out);
+        }
+        AstNode::Popup { main, popup_node } => {
+            collect_names(main, out);
+            collect_names(popup_node, out);
+        }
     }
-    format!("{{{}}}", parts.join(", "))
-}
-
-pub fn stringify_dsl(value: &JsonValue) -> String {
-    stringify_value(value)
-}
-
-pub fn stringify_json_rows(rows: &[Vec<JsonValue>]) -> String {
-    stringify_value(&JsonValue::Array(
-        rows.iter()
-            .map(|row| JsonValue::Array(row.clone()))
-            .collect(),
-    ))
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1036,50 +847,20 @@ pub fn print_rows(rows: &[Vec<AstNode>]) -> String {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// JSON value helpers
-// ═══════════════════════════════════════════════════════════════════
-
-fn json_value_to_string(v: &JsonValue) -> String {
-    match v {
-        JsonValue::Str(s) => s.clone(),
-        JsonValue::Num(n) => n.to_string(),
-        JsonValue::Bool(b) => b.to_string(),
-        JsonValue::Null => "null".to_string(),
-        JsonValue::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(json_value_to_string).collect();
-            format!("[{}]", items.join(", "))
-        }
-        JsonValue::Object(obj) => {
-            let mut parts: Vec<String> = Vec::new();
-            for (k, v) in obj {
-                parts.push(format!("{k}: {}", json_value_to_string(v)));
-            }
-            format!("{{{}}}", parts.join(", "))
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════
 // Public convenience wrappers
 // ═══════════════════════════════════════════════════════════════════
 
+
 pub struct CompileSourceResult {
     pub rows: Vec<Vec<AstNode>>,
-    pub json: Vec<Vec<JsonValue>>,
     pub warnings: Vec<String>,
 }
 
 pub fn compile_source(src: &str) -> Result<CompileSourceResult, CompileError> {
     let result = parse(src).map_err(|e| CompileError::new(format!("{e}")))?;
-    let json = compile(&result.rows)?;
-    validate_termux_json(&json)?;
-    let warnings = collect_warnings(&json);
-    Ok(CompileSourceResult { rows: result.rows, json, warnings })
-}
-
-pub fn to_extra_keys_json(src: &str) -> Result<String, CompileError> {
-    let result = compile_source(src)?;
-    Ok(stringify_json_rows(&result.json))
+    validate_compiled_rows(&result.rows)?;
+    let warnings = collect_warnings(&result.rows);
+    Ok(CompileSourceResult { rows: result.rows, warnings })
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1154,35 +935,40 @@ mod tests {
     #[test]
     fn compile_simple() {
         let result = compile_source("ESC").unwrap();
-        assert_eq!(result.json.len(), 1);
-        assert_eq!(result.json[0][0], JsonValue::Str("ESC".into()));
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0][0],
+            AstNode::Key { key: "ESC".into(), kind: KeyKind::Named }
+        );
     }
 
     #[test]
     fn compile_combo() {
         let result = compile_source("CTRL(d)").unwrap();
-        assert!(matches!(&result.json[0][0], JsonValue::Object(m) if m.get("macro").is_some()));
+        assert!(matches!(&result.rows[0][0], AstNode::Combo { .. }));
     }
 
     #[test]
     fn compile_label() {
         let result = compile_source("CTRL:C").unwrap();
-        if let JsonValue::Object(m) = &result.json[0][0] {
-            assert_eq!(m.get("key").unwrap(), &JsonValue::Str("CTRL".into()));
-            assert_eq!(m.get("display").unwrap(), &JsonValue::Str("C".into()));
-        } else {
-            panic!("expected object");
+        match &result.rows[0][0] {
+            AstNode::Label { node, label } => {
+                assert_eq!(label, "C");
+                assert!(matches!(&**node, AstNode::Key { key, .. } if key == "CTRL"));
+            }
+            other => panic!("expected label, got {other:?}"),
         }
     }
 
     #[test]
     fn compile_popup() {
         let result = compile_source("ESC.DRAWER").unwrap();
-        if let JsonValue::Object(m) = &result.json[0][0] {
-            assert_eq!(m.get("key").unwrap(), &JsonValue::Str("ESC".into()));
-            assert_eq!(m.get("popup").unwrap(), &JsonValue::Str("DRAWER".into()));
-        } else {
-            panic!("expected object");
+        match &result.rows[0][0] {
+            AstNode::Popup { main, popup_node } => {
+                assert!(matches!(&**main, AstNode::Key { key, .. } if key == "ESC"));
+                assert!(matches!(&**popup_node, AstNode::Key { key, .. } if key == "DRAWER"));
+            }
+            other => panic!("expected popup, got {other:?}"),
         }
     }
 
@@ -1220,52 +1006,38 @@ mod tests {
 
     #[test]
     fn warnings_empty_display() {
-        let mut obj = HashMap::new();
-        obj.insert("key".to_string(), JsonValue::Str("ESC".into()));
-        obj.insert("display".to_string(), JsonValue::Str("".into()));
-        let json = vec![vec![JsonValue::Object(obj)]];
-        let warnings = collect_warnings(&json);
-        assert!(warnings.iter().any(|w| w.contains("display") && w.contains("为空")));
+        let result = compile_source("ESC:").unwrap();
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("display") && w.contains("为空")));
     }
 
     #[test]
     fn warnings_missing_drawer() {
-        let json = vec![vec![JsonValue::Str("ESC".into())]];
-        let warnings = collect_warnings(&json);
-        assert!(warnings.iter().any(|w| w.contains("DRAWER")));
+        let result = compile_source("ESC").unwrap();
+        assert!(result.warnings.iter().any(|w| w.contains("DRAWER")));
     }
 
     #[test]
     fn warnings_missing_keyboard() {
-        let json = vec![vec![JsonValue::Str("ESC".into())]];
-        let warnings = collect_warnings(&json);
-        assert!(warnings.iter().any(|w| w.contains("KEYBOARD")));
+        let result = compile_source("ESC").unwrap();
+        assert!(result.warnings.iter().any(|w| w.contains("KEYBOARD")));
     }
 
     #[test]
-    fn validate_termux_json_rejects_key_and_macro() {
-        let mut obj = HashMap::new();
-        obj.insert("key".to_string(), JsonValue::Str("ESC".into()));
-        obj.insert("macro".to_string(), JsonValue::Str("CTRL d".into()));
-        let json = vec![vec![JsonValue::Object(obj)]];
-        assert!(validate_termux_json(&json).is_err());
+    fn validate_rejects_label_inside_combo() {
+        assert!(compile_source("CTRL(ESC:x)").is_err());
     }
 
     #[test]
-    fn validate_termux_json_rejects_no_key_no_macro_no_display() {
-        let mut obj = HashMap::new();
-        obj.insert("popup".to_string(), JsonValue::Str("X".into()));
-        let json = vec![vec![JsonValue::Object(obj)]];
-        assert!(validate_termux_json(&json).is_err());
+    fn validate_rejects_popup_inside_combo() {
+        assert!(compile_source("CTRL(ESC.DRAWER)").is_err());
     }
 
     #[test]
-    fn validate_termux_json_accepts_display_only() {
-        let mut obj = HashMap::new();
-        obj.insert("key".to_string(), JsonValue::Str("ESC".into()));
-        obj.insert("display".to_string(), JsonValue::Str("X".into()));
-        let json = vec![vec![JsonValue::Object(obj)]];
-        assert!(validate_termux_json(&json).is_ok());
+    fn validate_accepts_label_on_key() {
+        assert!(compile_source("ESC:Quit").is_ok());
     }
 
     #[test]
@@ -1277,22 +1049,10 @@ mod tests {
     #[test]
     fn quoted_literal_preserves_case() {
         let result = compile_source("'d'").unwrap();
-        assert_eq!(result.json[0][0], JsonValue::Str("d".into()));
+        assert_eq!(
+            result.rows[0][0],
+            AstNode::Key { key: "d".into(), kind: KeyKind::Literal }
+        );
     }
 
-    #[test]
-    fn stringify_bare_token() {
-        let mut obj = HashMap::new();
-        obj.insert("key".to_string(), JsonValue::Str("ESC".into()));
-        let s = stringify_dsl(&JsonValue::Object(obj));
-        assert_eq!(s, "{key: ESC}");
-    }
-
-    #[test]
-    fn stringify_quoted_string() {
-        let mut obj = HashMap::new();
-        obj.insert("key".to_string(), JsonValue::Str("/".into()));
-        let s = stringify_dsl(&JsonValue::Object(obj));
-        assert_eq!(s, "{key: \"/\"}");
-    }
 }

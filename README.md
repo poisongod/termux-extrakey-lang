@@ -3,10 +3,10 @@
 **Termux Extra key Language** — 键盘布局 DSL + TUI 工具链。
 
 用一门小语言描述 Termux 额外按键行（extra-keys），配合两套终端 UI 可视化编辑
-（键盘布局编辑、行为规则编辑），并一键编译回写 `termux.properties` 热部署。
+（键盘布局编辑、行为规则编辑），并一键编译成 `~/.termux/termux.tekl` 热部署。
 
 - Rust Core（微内核）+ Rhai ID 插件，GPL-3.0（`LICENSE`）
-- 当前版本 v0.4.0
+- 当前版本 v0.5.0
 - 需求文档：`tekl-PRD.md`；文法：`ebnf/*.ebnf`（另有 `.ebnf.txt` 同文副本）
 
 ```
@@ -23,7 +23,7 @@
   extra-keys (tekl)   ┌───────────────────────────────────────┐
         │              │  Arc<Mutex<App>> / <EditorState> 状态 │
         v              └───────────────────────────────────────┘
-  termux.properties
+  ~/.termux/termux.tekl
         │
         v
   termux-reload-settings
@@ -61,7 +61,7 @@ cp target/release/tekl $PREFIX/bin/tekl        # 通常即上面的 /data/data/.
 ```bash
 scripts/package-release.sh aarch64    # → release/tekl-aarch64.tar.gz
 scripts/package-release.sh armv7      # → release/tekl-armv7.tar.gz
-gh release upload v0.4.0 release/tekl-aarch64.tar.gz --clobber
+gh release upload v0.5.0 release/tekl-aarch64.tar.gz --clobber
 ```
 
 包内 `tekl-<arch>` 与三个模板（`termux.tekl` / `tekl.ttoll` / `editor.ttoll`）同级。程序查找出厂模板的顺序是：
@@ -80,8 +80,8 @@ gh release upload v0.4.0 release/tekl-aarch64.tar.gz --clobber
 发版只需打标签：
 
 ```bash
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
 资产为 `tekl-aarch64.tar.gz` / `tekl-armv7.tar.gz`，包内是 `tekl-<arch>` +
@@ -94,7 +94,7 @@ git push origin v0.4.0
 ```bash
 tekl                              # 布局 TUI，编辑 ~/.termux/termux.tekl（首次运行自动生成）
 tekl edit <file>                  # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错
-tekl reload <file> [--no-reload]  # 编译 .tekl → termux.properties → termux-reload-settings
+tekl reload <file> [--no-reload]  # 编译 .tekl → ~/.termux/termux.tekl → termux-reload-settings
 ```
 
 ### 布局 TUI（`tekl` / `tekl edit keys.tekl`）
@@ -320,10 +320,10 @@ ttoll 编辑器（0x00–0x17 共 24 个）：
 
 `tekl reload <file>`（`src/compiler/generator.rs` + `src/termux/`）：
 
-1. **编译**：读取 `.tekl` → `keys::compile_source` 得 AST 与警告。
-2. **序列化**：`print_rows` 还原成规范 tekl 文本，压成一行（`;` 分行），
-   按 `java.util.Properties` 规则转义反斜杠后写入 `extra-keys = ...`。
-3. **原子写盘**：替换/追加 `~/.termux/termux.properties` 中 `extra-keys = ...` 行；
+1. **编译**：读取 `.tekl` → `keys::compile_source` 得 AST、警告并做 AST 级校验
+   （不再经过 JSON 中间层）。
+2. **序列化**：`print_rows` 还原成规范 tekl 文本（一行一个键盘行，`;` 结尾）。
+3. **原子写盘**：写入 `~/.termux/termux.tekl`（`--output` 可覆盖）；
    先写临时文件再 rename，写前备份 `*.tekl.bak`，写后读回校验。
 4. **生效**：调用 `termux-reload-settings`；失败仅告警不致命（文件已写入）。
 

@@ -1,9 +1,10 @@
 use crate::lib;
 
-/// Compile a tekl source file and write the layout to the `extra-keys` property.
+/// Compile a tekl source file and write the canonical layout to
+/// `~/.termux/termux.tekl` (or the path given with `--output`).
 ///
-/// The value written is tekl text (single line, rows separated by `;`), not JSON. The Termux app
-/// parses it natively.
+/// The Termux fork reads that file directly and parses tekl natively, so there is no
+/// `termux.properties` layer, no escaping and no JSON intermediate anymore.
 pub fn run_compile(
     file: &Option<String>,
     output: &Option<String>,
@@ -19,13 +20,12 @@ pub fn run_compile(
         eprintln!("warning: {w}");
     }
 
-    // 一行的 tekl 文本，行之间用 `;` 分隔；换行只用于源码可读性。
-    let tekl = lib::keys::print_rows(&result.rows).replace('\n', " ");
+    // Canonical tekl source: one row per line, rows terminated by `;`.
+    let tekl = lib::keys::print_rows(&result.rows);
 
-    // Write to termux.properties
-    let props_path = resolve_properties_path(output)?;
-    crate::termux::writer::write_properties(&props_path, &tekl)?;
-    eprintln!("wrote extra-keys (tekl) to {}", props_path.display());
+    let extra_keys_path = resolve_extra_keys_path(output);
+    crate::termux::writer::write_extra_keys_file(&extra_keys_path, &tekl)?;
+    eprintln!("wrote tekl layout to {}", extra_keys_path.display());
 
     if reload {
         crate::termux::reload::reload_settings()?;
@@ -49,12 +49,12 @@ fn resolve_layout_file(file: &Option<String>) -> anyhow::Result<std::path::PathB
     }
 }
 
-fn resolve_properties_path(output: &Option<String>) -> anyhow::Result<std::path::PathBuf> {
+fn resolve_extra_keys_path(output: &Option<String>) -> std::path::PathBuf {
     match output.as_deref() {
-        Some(p) => Ok(std::path::PathBuf::from(p)),
+        Some(p) => std::path::PathBuf::from(p),
         None => {
             let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            Ok(home.join(".termux").join("termux.properties"))
+            home.join(".termux").join("termux.tekl")
         }
     }
 }
