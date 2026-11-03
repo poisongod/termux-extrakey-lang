@@ -88,6 +88,10 @@ git tag vX.Y.Z && git push origin vX.Y.Z
   用户 `~/.termux/id/` 只增不覆盖（同名内置被警告忽略）。
 - **注册池按消费者隔离**：布局 TUI↔`tui` 清单 + `tekl.ttoll`，编辑器↔`editor` 清单 + `editor.ttoll`；
   `0x00` 全局等同（退出），其余各自独立编号。
+- **两个 TUI 共用一份 ttoll 文法**：`~/.termux/tekl.ttoll` 与 `~/.termux/editor.ttoll`
+  都由 `ebnf/ttoll.ebnf` 约束，经同一个 `behavior::parse_rules`/`dispatch` 执行；
+  区别只在 ID 注册表与模式语义。不要为某个 TUI 另造文法或旁路 dispatch。
+  守卫测试：`both_tui_rule_files_are_governed_by_ttoll_ebnf`。
 - **文法冻结**：`ebnf/ttoll.ebnf` 键词汇固定 K∪D 共 9 个（ESC/ALT/CTRL/SPACE/ENTER + 四方向）。
   和弦（`CTRL+x`/`ALT+x`）的 x 也必须是文法键——`CTRL+SPACE`、`ALT+LEFT` 合法，`CTRL+C`/`CTRL+S`
   （字符级和弦）**非法**：`tokenize_rule` 直接拒绝，`is_known_key`/`crossterm_to_chord` 不产生候选。

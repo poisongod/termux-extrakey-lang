@@ -1,6 +1,11 @@
 Tekl Tui Operational logic Language (ttoll)
 EBNF Standard: ISO/IEC 14977
 
+(* 两个 TUI 共用这一份文法：~/.termux/tekl.ttoll（布局 TUI）与
+   ~/.termux/editor.ttoll（行为编辑器）。二者只差 ID 注册表与模式语义：
+   布局 TUI 的 0x01/0x02/0x03 = Normal/Edit/Popup，
+   编辑器的 0x01/0x02/0x03 = Normal/Insert/Command。 *)
+
 (* ── 行式语法约定 ───────────────────────────────────────────────────
    - 一行最多一条规则；行首与行尾的空白会被去掉。
    - 文件中的空行、以 '(*' 开头的行，以及形如 'K = …' / 'D = …' 的文法

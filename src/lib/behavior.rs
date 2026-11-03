@@ -854,12 +854,40 @@ mod tests {
     }
 
     #[test]
-    fn tui_ttoll_targets_registered_ids() {
-        // TUI 的 0x03 由输入层直接进入，不经过 hex action 跳转，
-        // 因此这里只校验 action ID，不校验可达性。
-        let reg = crate::lib::id::IdRegistry::for_tui();
-        let ids: HashSet<String> = reg.all_entries().iter().map(|e| e.id.clone()).collect();
-        check_action_ids(include_str!("../../tekl.ttoll"), &ids).unwrap();
+    fn both_tui_rule_files_are_governed_by_ttoll_ebnf() {
+        // 同一个 ttoll 文法同时约束两个 TUI 的规则文件，只是消费者注册表不同。
+        // 布局 TUI 的 0x03 由输入层进入，不经过 hex action 跳转，所以这里只做
+        // 文法 + action ID 校验，不强制模式可达性。
+        let grammar = include_str!("../../ebnf/ttoll.ebnf");
+        for name in ["tekl.ttoll", "editor.ttoll"] {
+            assert!(grammar.contains(name), "ebnf/ttoll.ebnf 未声明 {name}");
+        }
+
+        let cases: [(&str, &str, crate::lib::id::IdRegistry); 2] = [
+            (
+                "tekl.ttoll",
+                include_str!("../../tekl.ttoll"),
+                crate::lib::id::IdRegistry::for_tui(),
+            ),
+            (
+                "editor.ttoll",
+                include_str!("../../editor.ttoll"),
+                crate::lib::id::IdRegistry::for_editor(),
+            ),
+        ];
+        for (name, source, reg) in cases {
+            let ids: HashSet<String> = reg.all_entries().iter().map(|e| e.id.clone()).collect();
+            let rules = parse_rules(source)
+                .unwrap_or_else(|e| panic!("{name} 不符合 ttoll.ebnf: {e}"));
+            assert!(!rules.is_empty(), "{name} 不应为空");
+            for rule in &rules {
+                assert!(
+                    ids.contains(&rule.action),
+                    "{name} 指向未注册的 ID: {}",
+                    rule.action
+                );
+            }
+        }
     }
 
     #[test]

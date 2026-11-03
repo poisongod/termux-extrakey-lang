@@ -303,6 +303,9 @@ ttoll 编辑器（0x00–0x17 共 24 个）：
 
 ### 注册池隔离
 
+两个 TUI 的按键行为都由同一份 `ebnf/ttoll.ebnf` 约束（`behavior::parse_rules` +
+`dispatch`），只是消费者不同：
+
 - 布局 TUI ↔ `tui` 清单 + `tekl.ttoll`
 - 编辑器 ↔ `editor` 清单 + `editor.ttoll`
 - `0x00` 两池等同（退出），其余 ID 各自独立编号。

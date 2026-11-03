@@ -253,10 +253,13 @@ tekl reload <file>      # 校验 → 写 ~/.termux/termux.tekl → termux-reload
 | 编辑对象 | 键盘矩阵（所见即所得） | `.ttoll` 规则文本 |
 | ID 插件 | `src/id/tui/<ID>.rhai` | `src/id/editor/<ID>.rhai` |
 | 行为规则 | `tekl.ttoll` | `editor.ttoll` |
+| 行为文法 | `ebnf/ttoll.ebnf` | `ebnf/ttoll.ebnf`（同一份） |
+| 模式号 | 0x01/02/03 = 浏览/主键/弹出 | 0x01/02/03 = Normal/Insert/Command |
 | 注册池 | 独立实例 | 独立实例 |
 
-两者结构对称：同一套 dispatch 引擎、同一套 ActionHost 接口，仅词汇表不同。
-ttoll 编辑器本身是"用 ttoll 驱动的 ttoll 编辑器"——自举验证行为语言完备性。
+两者结构对称：同一份 ttoll EBNF、同一套 `parse_rules`/`dispatch` 引擎；
+区别只在 ID 注册表、模式语义与编辑对象。ttoll 编辑器本身是"用 ttoll 驱动的
+ttoll 编辑器"——自举验证行为语言完备性。
 
 ### 7.3 TUI 布局
 
