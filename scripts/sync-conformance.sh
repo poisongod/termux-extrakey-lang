@@ -18,7 +18,7 @@ if [ ! -d "$app/termux-shared" ]; then
     exit 1
 fi
 
-rm -rf "$dst"
+rm -f "$dst/manifest.tsv" "$dst"/cases/*.tekl
 mkdir -p "$dst/cases"
 cp "$src/manifest.tsv" "$dst/manifest.tsv"
 cp "$src"/cases/*.tekl "$dst/cases/"
