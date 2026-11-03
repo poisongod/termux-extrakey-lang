@@ -95,6 +95,7 @@ git push origin v0.5.0
 tekl                              # 布局 TUI，编辑 ~/.termux/termux.tekl（首次运行自动生成）
 tekl edit <file>                  # .tekl → 布局 TUI；.ttoll → 行为编辑器；其他后缀报错
 tekl reload <file> [--no-reload]  # 编译 .tekl → ~/.termux/termux.tekl → termux-reload-settings
+tekl reload <file> --output out.tekl  # 写到指定路径（不覆盖默认布局）
 ```
 
 ### 布局 TUI（`tekl` / `tekl edit keys.tekl`）
@@ -325,9 +326,12 @@ ttoll 编辑器（0x00–0x17 共 24 个）：
 2. **序列化**：`print_rows` 还原成规范 tekl 文本（一行一个键盘行，`;` 结尾）。
 3. **原子写盘**：写入 `~/.termux/termux.tekl`（`--output` 可覆盖）；
    先写临时文件再 rename，写前备份 `*.tekl.bak`，写后读回校验。
+   若源文件就是目标文件（`tekl reload ~/.termux/termux.tekl` 的常见用法），
+   只做校验、不重写，注释与排版保持不变。
 4. **生效**：调用 `termux-reload-settings`；失败仅告警不致命（文件已写入）。
 
-`--no-reload` 跳过第 4 步。
+`--no-reload` 跳过第 4 步。G 全局设置（`height=` / `theme=` / `layout=` / `reload`）
+会被解析但当前 Termux App 不接受，reload 时会打印警告并忽略。
 
 ## 架构与契约
 

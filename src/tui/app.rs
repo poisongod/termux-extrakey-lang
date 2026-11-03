@@ -396,11 +396,7 @@ impl App {
         }
         // Add globals
         for g in &self.globals {
-            match &g.value {
-                keys::GlobalValue::Number(n) => lines.push(format!("G {} = {};", g.key, n)),
-                keys::GlobalValue::Ident(s) => lines.push(format!("G {} = {};", g.key, s)),
-                keys::GlobalValue::Bool(b) => lines.push(format!("G {} = {};", g.key, b)),
-            }
+            lines.push(g.to_source());
         }
         lines.join("\n")
     }
@@ -1468,6 +1464,21 @@ mod tests {
         let output = app.to_source();
         assert!(output.contains("ESC"));
         assert!(output.contains("a b"));
+    }
+
+    #[test]
+    fn app_to_source_preserves_globals() {
+        let source = "height = 40\ntheme = dark\nESC;".to_string();
+        let app = App::new(PathBuf::from("test.tekl"), source).unwrap();
+        let output = app.to_source();
+
+        assert!(output.contains("height = 40"));
+        assert!(output.contains("theme = dark"));
+        assert!(!output.contains("G height"));
+
+        let reparsed = keys::parse(&output).unwrap();
+        assert_eq!(reparsed.rows.len(), 1);
+        assert_eq!(reparsed.globals.len(), 2);
     }
 
     #[test]

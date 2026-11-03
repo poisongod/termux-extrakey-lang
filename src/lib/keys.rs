@@ -349,6 +349,19 @@ pub enum GlobalValue {
     Bool(bool),
 }
 
+impl Global {
+    /// Serialize back to tekl source. The result is accepted by [`parse`], so globals
+    /// survive a TUI save/load round trip.
+    pub fn to_source(&self) -> String {
+        match &self.value {
+            GlobalValue::Bool(true) => self.key.clone(),
+            GlobalValue::Bool(false) => format!("{} = false", self.key),
+            GlobalValue::Number(n) => format!("{} = {}", self.key, n),
+            GlobalValue::Ident(s) => format!("{} = {}", self.key, s),
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Parser
 // ═══════════════════════════════════════════════════════════════════
@@ -853,14 +866,25 @@ pub fn print_rows(rows: &[Vec<AstNode>]) -> String {
 
 pub struct CompileSourceResult {
     pub rows: Vec<Vec<AstNode>>,
+    pub globals: Vec<Global>,
     pub warnings: Vec<String>,
 }
 
 pub fn compile_source(src: &str) -> Result<CompileSourceResult, CompileError> {
     let result = parse(src).map_err(|e| CompileError::new(format!("{e}")))?;
     validate_compiled_rows(&result.rows)?;
-    let warnings = collect_warnings(&result.rows);
-    Ok(CompileSourceResult { rows: result.rows, warnings })
+    let mut warnings = collect_warnings(&result.rows);
+
+    // The Termux app accepts only the key matrix; G assignments are rejected there.
+    // Keep them parseable for the TUI but tell the user they will not reach the app.
+    for g in &result.globals {
+        warnings.push(format!(
+            "全局设置 '{}' 暂不被 Termux App 支持，写入布局时会被忽略",
+            g.to_source()
+        ));
+    }
+
+    Ok(CompileSourceResult { rows: result.rows, globals: result.globals, warnings })
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1023,6 +1047,16 @@ mod tests {
     fn warnings_missing_keyboard() {
         let result = compile_source("ESC").unwrap();
         assert!(result.warnings.iter().any(|w| w.contains("KEYBOARD")));
+    }
+
+    #[test]
+    fn warnings_global_settings_are_ignored() {
+        let result = compile_source("height = 40\nESC").unwrap();
+        assert_eq!(result.globals.len(), 1);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("height = 40") && w.contains("忽略")));
     }
 
     #[test]

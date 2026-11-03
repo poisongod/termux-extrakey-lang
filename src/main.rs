@@ -25,6 +25,9 @@ enum Commands {
     Reload {
         /// Source .tekl file
         file: String,
+        /// Write to this path instead of ~/.termux/termux.tekl
+        #[arg(long)]
+        output: Option<String>,
         /// Reload termux settings after write
         #[arg(long)]
         no_reload: bool,
@@ -57,8 +60,8 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Some(Commands::Reload { file, no_reload }) => {
-            compiler::generator::run_compile(&Some(file), &None, false, !no_reload)
+        Some(Commands::Reload { file, output, no_reload }) => {
+            compiler::generator::run_compile(&file, output.as_deref(), !no_reload)
         }
     }
 }
