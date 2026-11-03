@@ -1,13 +1,15 @@
 //! ttoll behavior language — parser + static checks.
 //!
-//! Grammar (from docs/ttoll.ebnf):
+//! Grammar (from ebnf/ttoll.ebnf):
 //!   M = '0x01' | '0x02' | '0x03'                        (mode states)
 //!   K = 'ESC' | 'ALT' | 'CTRL' | 'SPACE' | 'ENTER'      (function keys)
 //!   D = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT'                 (direction keys)
-//!   ID = M | /0x[0-9A-Fa-f]{2}/                           (action ID)
-//!   C = K ',' C | K | '{' C '}'                           (key sequence)
-//!   R = M ',' C '>' ID | M ',' D '>' ID | C '>' ID | D '>' ID
-//!   P = { R '\n' }                                        (program)
+//!   Key = K | D
+//!   Chord = Key { '+' Key }
+//!   Step = Key [ '*' ] | Chord | '{' SetItem { ',' SetItem } '}'
+//!   Lhs = [ M ',' ] Step { ',' Step }
+//!   Rule = Lhs '>' ? non-empty action to end of line ?
+//!   P = { Rule | ? ignored line ? }
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -545,6 +547,18 @@ mod tests {
         assert_eq!(all_keys().len(), 9);
         for l in ["h", "j", "k", "l", "i", "G", "x", "?", "TAB", "BKSP"] {
             assert!(!all_keys().contains(l), "{l} 不在文法内");
+        }
+    }
+
+    #[test]
+    fn ebnf_lists_every_key() {
+        // 文法冻结守卫：K ∪ D 的每个键名都必须出现在 ttoll.ebnf。
+        let src = include_str!("../../ebnf/ttoll.ebnf");
+        for key in all_keys() {
+            assert!(
+                src.contains(&format!("'{key}'")),
+                "ebnf/ttoll.ebnf 缺少按键 '{key}'"
+            );
         }
     }
 

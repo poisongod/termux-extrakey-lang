@@ -1100,4 +1100,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ebnf_lists_every_key() {
+        // 文法冻结守卫：keyset 里的每个按键名都必须出现在 tekl.ebnf。
+        let src = include_str!("../../ebnf/tekl.ebnf");
+        for key in keyset::NAMED_KEYS.iter().chain(keyset::SPECIAL_KEYS.iter()) {
+            assert!(
+                src.contains(&format!("'{key}'")),
+                "ebnf/tekl.ebnf 缺少按键 '{key}'"
+            );
+        }
+    }
+
 }

@@ -32,57 +32,58 @@ tekl 完全替代 termux.properties，成为 Termux 的唯一配置文件。
 
 ### 3.1 tekl.ebnf（键盘布局语法）
 
+完整文法以 `ebnf/tekl.ebnf` 为准（`.ebnf.txt` 是符号链接）；要点：
+
 ```
-Termux Extra key Language (tekl)
-EBNF Standard: ISO/IEC 14977
+(* 空白/'#' 注释等价；换行不是语句分隔符，键盘行只由 ';' 或文件末尾结束 *)
+(* 键名与全局设置名大小写不敏感；height/theme/layout/reload 为顶层保留字 *)
 
-(* N：按键名 *)
-(* S：修饰键 *)
-(* A：按键动作 *)
-(* G：Termux 全局配置项 *)
-(* M：键盘矩阵 *)
-(* P：完整 tekl 文件 *)
-
-N = 'ESC' | 'TAB' | 'HOME' | 'END' | 'PGUP' | 'PGDN'
-  | 'INS' | 'DEL' | 'BKSP'
-  | 'UP' | 'LEFT' | 'RIGHT' | 'DOWN'
-  | 'ENTER' | 'BACKSLASH' | 'QUOTE' | 'APOSTROPHE'
+N = 'ESC' | 'TAB' | 'HOME' | 'END' | 'PGUP' | 'PGDN' | 'INS' | 'DEL' | 'BKSP'
+  | 'UP' | 'LEFT' | 'RIGHT' | 'DOWN' | 'ENTER'
+  | 'BACKSLASH' | 'QUOTE' | 'APOSTROPHE'
   | 'F1' | … | 'F12'
-  | 'KEYBOARD' | 'DRAWER' | 'SCROLL' | 'SPACE' | 'PASTE'
-  | '"' { [^\n] } '"'
-  | "'" { [^\n] } "'"
+  | 'KEYBOARD' | 'DRAWER' | 'SCROLL' | 'SPACE' | 'PASTE' ;
+S = 'CTRL' | 'ALT' | 'FN' | 'SHIFT' ;
 
-S = 'CTRL' | 'ALT' | 'FN' | 'SHIFT'
+IDENT  = ( LETTER | DIGIT | '_' ) { LETTER | DIGIT | '_' } ;
+NUMBER = DIGIT { DIGIT } ;
+LITERAL = '"' { ? 非 '"'/换行 ? } '"' | "'" { ? 非 "'"/换行 ? } "'" ;
 
-A = N | S | A '(' A ')' | A ':' N
+A = ( N | S | IDENT | LITERAL ) { '(' A ')' | ':' [ IDENT ] } ;
+M = A [ '.' A ] ;
 
-G = 'height' '=' [0-9]+
+G = 'height' '=' NUMBER
   | 'theme' '=' IDENT
   | 'layout' '=' IDENT
-  | 'reload'
+  | 'reload' ;
 
-M = A | A '.' A | M M | M '\n' | M ';\n'
-
-P = { G '\n' } { M }
+Row = M { G | M } ';' ;
+P = { G | ';' | Row } [ M { G | M } ] ;
 ```
+
+任意其他 `IDENT` 也按字面键接受；标签必须是不带引号的 `IDENT`（空标签合法但会警告）。
 
 ### 3.2 ttoll.ebnf（行为规则语法 — 插件开发者层）
 
-```
-Tekl Tui Operational Logic Language (ttoll)
-EBNF Standard: ISO/IEC 14977
+完整文法以 `ebnf/ttoll.ebnf` 为准：
 
-K = 'ESC' | 'ALT' | 'CTRL' | 'SPACE' | 'ENTER'
-D = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT'
-M = '0x01' | '0x02' | '0x03'
-ID = /0x[0-9A-Fa-f]{2}/
-C = K ',' C | K | '{' C '}'
-R = M ',' C '>' ID
-  | M ',' D '>' ID
-  | C '>' ID
-  | D '>' ID
-P = { R '\n' }
 ```
+(* 行式语法：空行、'(*' 开头的行、'K = …' 标题行、无 '>' 的行均整行忽略 *)
+(* LHS 内部不能有空白（'0x01, ESC' 非法）；和弦与 '{}' 内各项会 trim *)
+
+M = '0x01' | '0x02' | '0x03' ;
+K = 'ESC' | 'ALT' | 'CTRL' | 'SPACE' | 'ENTER' ;
+D = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT' ;
+Key = K | D ;
+Chord = Key { '+' Key } ;
+Step = Key [ '*' ] | Chord | '{' SetItem { ',' SetItem } '}' ;
+SetItem = Key | Chord ;
+Lhs = [ M ',' ] Step { ',' Step } ;
+Rule = Lhs '>' ? 非空动作串（到行尾） ? ;
+P = { Rule | ? 忽略行 ? } ;
+```
+
+`K`/`D` 单独出现表示整组按键；动作串通常形如 `0x10`，词法上由 ID 注册表校验。
 
 规则语义：`模式, 按键序列 > 动作ID`。无前缀模式的规则为全局生效。
 ID 是纯标识符——ttoll 只负责"什么键触发什么 ID"，不关心 ID 做什么。

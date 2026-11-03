@@ -7,7 +7,7 @@
 
 - Rust Core（微内核）+ Rhai ID 插件，GPL-3.0（`LICENSE`）
 - 当前版本 v0.5.2
-- 需求文档：`tekl-PRD.md`；文法：`ebnf/*.ebnf`（另有 `.ebnf.txt` 同文副本）
+- 需求文档：`tekl-PRD.md`；文法：`ebnf/*.ebnf`（`.ebnf.txt` 为同文符号链接）
 
 ```
         .tekl 源码                 ttoll 规则                ID 插件
@@ -198,7 +198,7 @@ CTRL+SPACE>0x40      # 和弦可作全局规则（无模式前缀时任意模式
 - 字符键 `i`、`Enter` 打引号形式均不产生分派候选。
 
 改变文法 = 破坏性变更，须同步 `behavior.rs`、全部 `.ttoll`、测试与
-`ebnf/*.ebnf(.txt)` 双份。
+`ebnf/*.ebnf`（`.ebnf.txt` 是指向同名 `.ebnf` 的符号链接）。
 
 ### 输入层硬编码（不经 ttoll）
 
