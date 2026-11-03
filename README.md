@@ -392,7 +392,20 @@ cargo test
 ```
 
 覆盖：tekl 词法/语法/round-trip、ttoll 解析与文法冻结（拒绝 `CTRL+C` 等字符级和弦）、
-ID 注册池、Rhai 脚本加载、布局矩阵行/列/移动/交换等纯数据测试（当前 118 通过）。
+ID 注册池、Rhai 脚本加载、布局矩阵行/列/移动/交换等纯数据测试。
+
+### 跨端一致性（conformance）
+
+`conformance/manifest.tsv` + `conformance/cases/*.tekl` 是 Rust CLI 与 App 内 Java 解析器的
+共享语料：同一份文件两边必须同时接受或拒绝，解析错误还要落在同一行列。Rust 侧由
+`src/lib/conformance.rs` 自动跑；Java 侧是 App 仓库的 `TeklConformanceTest`。
+
+```bash
+cargo test conformance
+scripts/sync-conformance.sh        # 把语料同步到 ../termux-app 的测试资源
+```
+
+改语法（或修解析器分歧）时必须先加 fixture，再让两边都绿。
 交互（ratatui raw mode）靠实机验证。
 
 ## 许可

@@ -3,3 +3,6 @@ pub mod behavior;
 pub mod keyset;
 pub mod user_dir;
 pub mod id;
+
+#[cfg(test)]
+mod conformance;

@@ -14,6 +14,8 @@ pub enum TokenizerError {
     UnterminatedString { message: String, line: usize, column: usize },
     #[error("keys: unexpected character '{ch}' (line {line}, column {column})")]
     UnexpectedChar { ch: char, line: usize, column: usize },
+    #[error("keys: number out of range (line {line}, column {column})")]
+    NumberOutOfRange { line: usize, column: usize },
 }
 
 #[derive(Debug, Error)]
@@ -241,7 +243,9 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, TokenizerError> {
                 i += 1;
             }
             let val_str: String = chars[start..i].iter().collect();
-            let value = val_str.parse::<i64>().unwrap();
+            let value = val_str
+                .parse::<i64>()
+                .map_err(|_| TokenizerError::NumberOutOfRange { line, column })?;
             tokens.push(Token::Number { value, line, column });
             column += i - start;
             continue;
@@ -612,6 +616,9 @@ pub fn parse(src: &str) -> Result<ParseResult, ParseError> {
         }
         TokenizerError::UnexpectedChar { ch, line, column } => {
             ParseError::general(format!("unexpected character '{ch}'"), line, column)
+        }
+        TokenizerError::NumberOutOfRange { line, column } => {
+            ParseError::general("number out of range", line, column)
         }
     })?;
     let mut parser = Parser::new(tokens);

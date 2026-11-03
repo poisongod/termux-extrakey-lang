@@ -1,0 +1,33 @@
+# name	expect	line	column	rows
+empty	ok			0
+simple_key	ok			1
+two_rows	ok			2
+comments	ok			2
+popup_label_combo	ok			1
+literals	ok			1
+crlf	ok			2
+globals	ok			1
+global_between_rows	ok			2
+unknown_ident	ok			1
+numeric_ident	ok			1
+nested_combo	ok			1
+empty_rows	ok			2
+label_empty	ok			1
+trailing_comment_no_newline	ok			1
+popup_label	ok			1
+quoted_key_with_hash	ok			1
+spaces_tabs	ok			2
+unexpected_char	error	1	5	
+unterminated_string	error	1	1	
+unterminated_string_after_key	error	1	5	
+quoted_label	error	1	5	
+duplicate_special	error	0	0	
+duplicate_special_labeled	error	0	0	
+nested_popup	error	1	11	
+missing_rparen	error	1	9	
+label_inside_combo	error	0	0	
+bad_global_number	error	1	10	
+bad_global_eq	error	1	8	
+reload_assignment	error	1	8	
+leading_dot	error	1	1	
+number_overflow	error	1	10	
