@@ -380,18 +380,13 @@ pub fn reachability(table: &HashMap<Option<String>, Vec<Rule>>) -> HashSet<Strin
 /// Static validation: keys valid at parse time, action IDs in whitelist, modes reachable.
 pub fn check_program(source: &str, action_ids: Option<&HashSet<String>>) -> Result<CheckResult> {
     let rules = parse_rules(source)?;
+    if let Some(ids) = action_ids {
+        validate_action_ids(&rules, ids)?;
+    }
     let table = build_table(&rules);
     let reachable = reachability(&table);
 
     for r in &rules {
-        if let Some(ids) = action_ids {
-            if !ids.is_empty() && !ids.contains(&r.action) {
-                return Err(BehaviorError::Msg(format!(
-                    "unknown action id '{}'",
-                    r.action
-                )));
-            }
-        }
         if let Some(ref mode) = r.mode {
             if !reachable.contains(mode) {
                 return Err(BehaviorError::Msg(format!(
@@ -403,6 +398,30 @@ pub fn check_program(source: &str, action_ids: Option<&HashSet<String>>) -> Resu
     }
 
     Ok(CheckResult { rules, table })
+}
+
+/// Validate that every rule targets a registered action ID.
+///
+/// Unlike [`check_program`], this does not require modes to be reachable through
+/// hex action IDs: plugins can also switch modes at runtime via `set_mode`.
+pub fn check_action_ids(source: &str, action_ids: &HashSet<String>) -> Result<()> {
+    let rules = parse_rules(source)?;
+    validate_action_ids(&rules, action_ids)
+}
+
+fn validate_action_ids(rules: &[Rule], action_ids: &HashSet<String>) -> Result<()> {
+    if action_ids.is_empty() {
+        return Ok(());
+    }
+    for r in rules {
+        if !action_ids.contains(&r.action) {
+            return Err(BehaviorError::Msg(format!(
+                "unknown action id '{}'",
+                r.action
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -824,6 +843,23 @@ mod tests {
             .to_string();
         assert!(err.contains("line 2"), "{err}");
         assert!(err.contains("unknown key 'NOTAKEY'"), "{err}");
+    }
+
+    #[test]
+    fn editor_ttoll_passes_static_checks() {
+        // 出厂规则必须通过完整静态检查（键词汇、action ID、模式可达性）。
+        let reg = crate::lib::id::IdRegistry::for_editor();
+        let ids: HashSet<String> = reg.all_entries().iter().map(|e| e.id.clone()).collect();
+        check_program(include_str!("../../editor.ttoll"), Some(&ids)).unwrap();
+    }
+
+    #[test]
+    fn tui_ttoll_targets_registered_ids() {
+        // TUI 的 0x03 由输入层直接进入，不经过 hex action 跳转，
+        // 因此这里只校验 action ID，不校验可达性。
+        let reg = crate::lib::id::IdRegistry::for_tui();
+        let ids: HashSet<String> = reg.all_entries().iter().map(|e| e.id.clone()).collect();
+        check_action_ids(include_str!("../../tekl.ttoll"), &ids).unwrap();
     }
 
     #[test]

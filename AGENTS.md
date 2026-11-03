@@ -65,6 +65,11 @@ git tag vX.Y.Z && git push origin vX.Y.Z
   行列）。`App::to_source` 用 LCS 对齐新旧行，只规范化新增/修改行；未改行按 span 原样
   复制。没有改动时直接返回原文件。行内全局设置若随行重写，会被移到末尾而不是丢弃。
   断言见 `app_save_without_edit_is_byte_identical`、`app_roundtrips_every_ok_conformance_fixture`。
+- **行为编辑器保存校验**：`:w`/`:s`/`:wq`/`:x` 调 `behavior::check_action_ids`，除语法外
+  校验 action ID 在编辑器注册表中；`:w!`/`:s!` 跳过。不要改成 `check_program`：它的
+  模式可达性只跟踪 hex action 跳转，而插件可以 `set_mode`，会误报（TUI 的 0x03 就是
+  输入层直接进入）。
+  断言见 `app_save_without_edit_is_byte_identical`、`app_roundtrips_every_ok_conformance_fixture`。
 
 ## 关键不变量
 

@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -300,7 +300,7 @@ fn ed_engine(handle: Arc<Mutex<EditorState>>, path: std::path::PathBuf) -> Scrip
             let mut s = h.lock().unwrap();
             let content = s.lines.join("\n");
             if validate {
-                if let Some(e) = validate_ttoll(&content) {
+                if let Some(e) = validate_ttoll(&content, &registered_ids(&s.id_registry)) {
                     s.status_msg = format!("语法错误: {}", e);
                     s.status_is_error = true;
                     return;
@@ -613,7 +613,7 @@ fn execute_command(state: &mut EditorState, path: &std::path::Path) {
         // ── 文件操作 ──
         "w" | "s" => {
             let content = state.lines.join("\n");
-            let err = validate_ttoll(&content);
+            let err = validate_ttoll(&content, &registered_ids(&state.id_registry));
             if let Some(e) = err {
                 state.status_msg = format!("语法错误: {}", e);
                 state.status_is_error = true;
@@ -633,7 +633,7 @@ fn execute_command(state: &mut EditorState, path: &std::path::Path) {
         }
         "wq" | "x" => {
             let content = state.lines.join("\n");
-            let err = validate_ttoll(&content);
+            let err = validate_ttoll(&content, &registered_ids(&state.id_registry));
             if let Some(e) = err {
                 state.status_msg = format!("语法错误: {}", e);
                 state.status_is_error = true;
@@ -714,18 +714,16 @@ fn normalize_hex(h: &str) -> String {
     h.strip_prefix("0x").unwrap_or(h).to_uppercase()
 }
 
-/// Validate ttoll syntax. Returns Some(error) if invalid.
-fn validate_ttoll(content: &str) -> Option<String> {
-    for (i, line) in content.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with("(*") {
-            continue;
-        }
-        if let Err(err) = behavior::tokenize_rule(line) {
-            return Some(format!("行 {}: {err}", i + 1));
-        }
-    }
-    None
+/// Validate ttoll syntax and action IDs before writing.
+fn validate_ttoll(content: &str, ids: &HashSet<String>) -> Option<String> {
+    behavior::check_action_ids(content, ids)
+        .err()
+        .map(|e| e.to_string())
+}
+
+/// Action IDs registered for the editor consumer.
+fn registered_ids(reg: &id::IdRegistry) -> HashSet<String> {
+    reg.all_entries().iter().map(|e| e.id.clone()).collect()
 }
 
 fn clamp_row(state: &mut EditorState) {
@@ -1012,4 +1010,47 @@ fn split_at_byte(s: &str, byte_idx: usize) -> (&str, Option<char>, &str) {
     let ch = after.chars().next();
     let rest = &after[ch.map_or(0, |c| c.len_utf8())..];
     (before, ch, rest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids(list: &[&str]) -> HashSet<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn validate_accepts_registered_action_id() {
+        assert!(validate_ttoll("0x01,ESC>0x02\n", &ids(&["0x01", "0x02"])).is_none());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_action_id() {
+        let err = validate_ttoll("0x01,ESC>0xFF\n", &ids(&["0x00", "0x01"])).unwrap();
+        assert!(err.contains("unknown action id '0xFF'"), "{err}");
+    }
+
+    #[test]
+    fn validate_reports_syntax_line() {
+        let err = validate_ttoll("0x01,ESC>0x02\n0x01,NOPE>0x02\n", &ids(&["0x02"])).unwrap();
+        assert!(err.contains("line 2"), "{err}");
+        assert!(err.contains("unknown key 'NOPE'"), "{err}");
+    }
+
+    #[test]
+    fn validate_skips_id_check_when_registry_is_empty() {
+        // 插件加载失败时不应阻塞用户的语法保存，但键法仍要校验。
+        assert!(validate_ttoll("0x01,ESC>0xFF\n", &HashSet::new()).is_none());
+        assert!(validate_ttoll("0x01,NOPE>0x02\n", &HashSet::new()).is_some());
+    }
+
+    #[test]
+    fn registered_ids_cover_the_builtin_editor_registry() {
+        let reg = id::IdRegistry::for_editor();
+        let set = registered_ids(&reg);
+        assert_eq!(set.len(), reg.all_entries().len());
+        assert!(set.contains("0x00"));
+        assert!(set.contains("0x01"));
+    }
 }
